@@ -6,14 +6,14 @@
   "compilationOptions": {},
   "targets": {
     ".NETCoreApp,Version=v6.0": {
-      "Mod030/1.0.0": {
+      "ChatImprovements/1.0.0": {
         "dependencies": {
           "Lib.Harmony": "2.4.2",
           "MonoGame.Framework": "3.8.5-preview.2",
           "Pathoschild.Stardew.ModTranslationClassBuilder": "2.2.1"
         },
         "runtime": {
-          "Mod030.dll": {}
+          "ChatImprovements.dll": {}
         }
       },
       "Lib.Harmony/2.4.2": {
@@ -176,7 +176,7 @@
     }
   },
   "libraries": {
-    "Mod030/1.0.0": {
+    "ChatImprovements/1.0.0": {
       "type": "project",
       "serviceable": false,
       "sha512": ""

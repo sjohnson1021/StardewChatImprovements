@@ -1,7 +1,7 @@
 is_global = true
 build_property.MSBuildProjectDirectory = /home/seanj/GOG Games/Stardew Valley/ChatImprovements
-build_property.RootNamespace = Mod030
-build_property.RootNamespace = Mod030
+build_property.RootNamespace = ChatImprovements
+build_property.RootNamespace = ChatImprovements
 build_property.TranslationClassBuilder_AddKeyMap = 
 build_property.TranslationClassBuilder_ClassModifiers = 
 build_property.TranslationClassBuilder_ClassName = 

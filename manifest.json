@@ -1,10 +1,10 @@
 {
   "Name": "Chat Improvements",
-  "Author": "YourName",
+  "Author": "Sean Johnson",
   "Version": "1.0.0",
   "Description": "Improves the chat box with longer messages and better editing.",
-  "UniqueID": "YourName.ChatImprovements",
-  "EntryDll": "Mod030.dll",
+  "UniqueID": "sjohnson1021.ChatImprovements",
+  "EntryDll": "ChatImprovements.dll",
   "MinimumApiVersion": "4.0.0",
   "UpdateKeys": []
 }

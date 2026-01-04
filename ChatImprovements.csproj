@@ -1,8 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <TargetFramework>net6.0</TargetFramework>
-    <RootNamespace>Mod030</RootNamespace>
-    <AssemblyName>Mod030</AssemblyName>
     <OutputType>Library</OutputType>
     <EnableHarmony>true</EnableHarmony> 
     <Nullable>enable</Nullable>
