@@ -1,0 +1,13 @@
+/home/seanj/GOG Games/Stardew Valley/firstChatImprovements/obj/Debug/net6.0/Mod030.csproj.AssemblyReference.cache
+/home/seanj/GOG Games/Stardew Valley/firstChatImprovements/obj/Debug/net6.0/Mod030.GeneratedMSBuildEditorConfig.editorconfig
+/home/seanj/GOG Games/Stardew Valley/firstChatImprovements/obj/Debug/net6.0/Mod030.AssemblyInfoInputs.cache
+/home/seanj/GOG Games/Stardew Valley/firstChatImprovements/obj/Debug/net6.0/Mod030.AssemblyInfo.cs
+/home/seanj/GOG Games/Stardew Valley/firstChatImprovements/obj/Debug/net6.0/Mod030.csproj.CoreCompileInputs.cache
+/home/seanj/GOG Games/Stardew Valley/ChatImprovements/bin/Debug/net6.0/Mod030.deps.json
+/home/seanj/GOG Games/Stardew Valley/ChatImprovements/bin/Debug/net6.0/Mod030.dll
+/home/seanj/GOG Games/Stardew Valley/ChatImprovements/obj/Debug/net6.0/Mod030.csproj.AssemblyReference.cache
+/home/seanj/GOG Games/Stardew Valley/ChatImprovements/obj/Debug/net6.0/Mod030.GeneratedMSBuildEditorConfig.editorconfig
+/home/seanj/GOG Games/Stardew Valley/ChatImprovements/obj/Debug/net6.0/Mod030.AssemblyInfoInputs.cache
+/home/seanj/GOG Games/Stardew Valley/ChatImprovements/obj/Debug/net6.0/Mod030.AssemblyInfo.cs
+/home/seanj/GOG Games/Stardew Valley/ChatImprovements/obj/Debug/net6.0/Mod030.csproj.CoreCompileInputs.cache
+/home/seanj/GOG Games/Stardew Valley/ChatImprovements/obj/Debug/net6.0/Mod030.dll

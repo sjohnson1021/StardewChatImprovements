@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net6.0</TargetFramework>
+    <RootNamespace>Mod030</RootNamespace>
+    <AssemblyName>Mod030</AssemblyName>
+    <OutputType>Library</OutputType>
+    <EnableHarmony>true</EnableHarmony> 
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Lib.Harmony" Version="2.4.2" />
+    <PackageReference Include="MonoGame.Framework" Version="3.8.5-preview.2" />
+    <PackageReference Include="Pathoschild.Stardew.ModBuildConfig" Version="4.4.0" />
+    <PackageReference Include="Pathoschild.Stardew.ModTranslationClassBuilder" Version="2.2.1" />
+    <PackageReference Include="JetBrains.ReSharper.CommandLineTools" Version="2025.2.5" />
+  </ItemGroup>
+
+</Project>
