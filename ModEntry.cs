@@ -8,26 +8,35 @@ namespace ChatImprovements;
 public sealed class ModEntry : Mod
 {
     private Harmony? harmony;
-    public static ModEntry? Instance { get; private set; } // Make accessible
-    public ModConfig Config { get; private set; } = new(); // Make public + initialize
+    public static ModEntry? Instance { get; private set; }
+    public ModConfig Config { get; private set; } = new();
 
     public override void Entry(IModHelper helper)
     {
         Instance = this;
         Config = helper.ReadConfig<ModConfig>();
         harmony = new Harmony(ModManifest.UniqueID);
-        harmony.PatchAll();
+        try
+        {
+            harmony.PatchAll();
+            Monitor.Log("Applied Harmony patches.", LogLevel.Trace);
+        }
+        catch (Exception ex)
+        {
+            Monitor.Log($"Failed to apply Harmony patches: {ex}", LogLevel.Error);
+        }
+
         helper.Events.GameLoop.GameLaunched += OnGameLaunched;
     }
 
     private void OnGameLaunched(object? sender, GameLaunchedEventArgs e)
     {
-        // Get GMCM API correctly
         IGenericModConfigMenuApi? api =
             Helper.ModRegistry.GetApi<IGenericModConfigMenuApi>("spacechase0.GenericModConfigMenu");
         if (api is null) return;
 
-        // Use the api directly (not configMenu)
+        var t = Helper.Translation;
+
         api.Register(
             ModManifest,
             () => Config = new ModConfig(),
@@ -36,43 +45,52 @@ public sealed class ModEntry : Mod
 
         api.AddNumberOption(
             ModManifest,
-            name: () => "Max Message Length",
-            tooltip: () => "The maximum number of characters allowed in a chat message.",
+            name: () => t.Get("config.maxMessageLength.name"),
+            tooltip: () => t.Get("config.maxMessageLength.tooltip"),
             getValue: () => Config.MaxMessageLength,
             setValue: value => Config.MaxMessageLength = value,
             min: 100,
-            max: 5000
+            max: 1000
+        );
+
+        api.AddNumberOption(
+            ModManifest,
+            name: () => t.Get("config.maxChatHistory.name"),
+            tooltip: () => t.Get("config.maxChatHistory.tooltip"),
+            getValue: () => Config.MaxChatHistory,
+            setValue: value => Config.MaxChatHistory = value,
+            min: 10,
+            max: 500
         );
 
         api.AddBoolOption(
             ModManifest,
-            name: () => "Enable Horizontal Scrolling",
-            tooltip: () => "Whether to enable horizontal scrolling when typing long messages.",
+            name: () => t.Get("config.enableHorizontalScrolling.name"),
+            tooltip: () => t.Get("config.enableHorizontalScrolling.tooltip"),
             getValue: () => Config.EnableHorizontalScrolling,
             setValue: value => Config.EnableHorizontalScrolling = value
         );
 
         api.AddBoolOption(
             ModManifest,
-            name: () => "Enable Cursor Control",
-            tooltip: () => "Whether to enable cursor control (arrow keys for navigation).",
+            name: () => t.Get("config.enableCursorControl.name"),
+            tooltip: () => t.Get("config.enableCursorControl.tooltip"),
             getValue: () => Config.EnableCursorControl,
             setValue: value => Config.EnableCursorControl = value
         );
 
         api.AddBoolOption(
             ModManifest,
-            name: () => "Allow URL Clicks When Chat Closed",
-            tooltip: () =>
-                "If enabled, you can click URLs in messages even when the chat box is not open. Disable to prevent accidental clicks.",
+            name: () => t.Get("config.allowUrlClickWhenChatClosed.name"),
+            tooltip: () => t.Get("config.allowUrlClickWhenChatClosed.tooltip"),
             getValue: () => Config.AllowUrlClickWhenChatClosed,
             setValue: value => Config.AllowUrlClickWhenChatClosed = value
         );
 
         api.AddNumberOption(
             ModManifest,
-            name: () => "Key Repeat Initial Delay",
-            tooltip: () => "The initial delay in seconds before arrow key repeat starts when holding the key.",
+            name: () => t.Get("config.keyRepeatInitialDelay.name"),
+            tooltip: () => t.Get("config.keyRepeatInitialDelay.tooltip"),
             getValue: () => Config.KeyRepeatInitialDelay,
             setValue: value => Config.KeyRepeatInitialDelay = value,
             min: 0.25f,
@@ -82,8 +100,8 @@ public sealed class ModEntry : Mod
 
         api.AddNumberOption(
             ModManifest,
-            name: () => "Key Repeat Delay",
-            tooltip: () => "The delay in seconds between repeated cursor movements when holding arrow keys.",
+            name: () => t.Get("config.keyRepeatDelay.name"),
+            tooltip: () => t.Get("config.keyRepeatDelay.tooltip"),
             getValue: () => Config.KeyRepeatDelay,
             setValue: value => Config.KeyRepeatDelay = value,
             min: 0.01f,
@@ -93,26 +111,50 @@ public sealed class ModEntry : Mod
 
         api.AddKeybindList(
             ModManifest,
+            () => Config.SelectAllKeybind,
+            value => Config.SelectAllKeybind = value,
+            () => t.Get("config.selectAllKeybind.name"),
+            () => t.Get("config.selectAllKeybind.tooltip")
+        );
+
+        api.AddKeybindList(
+            ModManifest,
             () => Config.CopyKeybind,
             value => Config.CopyKeybind = value,
-            () => "Copy Keybind",
-            () => "Keybind to copy selected text to clipboard"
+            () => t.Get("config.copyKeybind.name"),
+            () => t.Get("config.copyKeybind.tooltip")
         );
 
         api.AddKeybindList(
             ModManifest,
             () => Config.CutKeybind,
             value => Config.CutKeybind = value,
-            () => "Cut Keybind",
-            () => "Keybind to cut selected text to clipboard"
+            () => t.Get("config.cutKeybind.name"),
+            () => t.Get("config.cutKeybind.tooltip")
         );
 
         api.AddKeybindList(
             ModManifest,
             () => Config.PasteKeybind,
             value => Config.PasteKeybind = value,
-            () => "Paste Keybind",
-            () => "Keybind to paste text from clipboard"
+            () => t.Get("config.pasteKeybind.name"),
+            () => t.Get("config.pasteKeybind.tooltip")
+        );
+
+        api.AddKeybindList(
+            ModManifest,
+            () => Config.UndoKeybind,
+            value => Config.UndoKeybind = value,
+            () => t.Get("config.undoKeybind.name"),
+            () => t.Get("config.undoKeybind.tooltip")
+        );
+
+        api.AddKeybindList(
+            ModManifest,
+            () => Config.RedoKeybind,
+            value => Config.RedoKeybind = value,
+            () => t.Get("config.redoKeybind.name"),
+            () => t.Get("config.redoKeybind.tooltip")
         );
     }
 }

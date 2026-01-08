@@ -15,7 +15,10 @@ namespace ChatImprovements;
 internal class ChatUrlPatches
 {
     private static readonly List<UrlRegion> ActiveUrlRegions = new();
-    private static readonly Regex UrlRegex = new(@"https?://[^\s]+", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+    private static readonly Regex UrlRegex = new(@"https?://[^\s]+",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
     private static bool _wasMousePressed;
 
     // Cache which messages have URLs to avoid re-checking every frame
@@ -38,30 +41,36 @@ internal class ChatUrlPatches
             ModEntry.Instance?.Monitor.Log($"Opening URL: {url}", LogLevel.Debug);
 
             if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
-                // Windows
+            {
                 Process.Start(new ProcessStartInfo
                 {
                     FileName = url,
                     UseShellExecute = true
                 });
+            }
             else if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
-                // Linux
+            {
                 Process.Start("xdg-open", url);
+            }
             else if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
-                // macOS
+            {
                 Process.Start("open", url);
+            }
             else
-                // Fallback for other platforms
+            {
                 Process.Start(new ProcessStartInfo
                 {
                     FileName = url,
                     UseShellExecute = true
                 });
+            }
         }
         catch (Exception ex)
         {
             ModEntry.Instance?.Monitor.Log($"Failed to open URL: {ex.Message}", LogLevel.Error);
-            Game1.addHUDMessage(new HUDMessage("Failed to open URL", HUDMessage.error_type));
+            var t = ModEntry.Instance?.Helper.Translation;
+            Game1.addHUDMessage(new HUDMessage(t?.Get("hud.failedToOpenUrl") ?? "Failed to open URL",
+                HUDMessage.error_type));
         }
     }
 
@@ -74,11 +83,52 @@ internal class ChatUrlPatches
         public string Url = "";
     }
 
-    #region URL Rendering
+    #region Sender Name Tracking
+
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<ChatMessage, string> SenderNames =
+        new();
+
+    [HarmonyPatch(typeof(ChatBox), "receiveChatMessage")]
+    public class ReceiveChatMessagePatch
+    {
+        private static void Postfix(ChatBox __instance, long sourceFarmer, int chatKind, string message)
+        {
+            // Get the last added message
+            if (__instance.messages.Count == 0) return;
+            ChatMessage lastMsg = __instance.messages[^1];
+
+            // Resolve sender name
+            string? senderName = null;
+            if (chatKind == 0 || chatKind == 3) // Chat or Private
+            {
+                Farmer? farmer = null;
+                if (sourceFarmer == Game1.player.UniqueMultiplayerID)
+                    farmer = Game1.player;
+                else if (Game1.otherFarmers.TryGetValue(sourceFarmer, out Farmer? other))
+                    farmer = other;
+
+                if (farmer != null)
+                {
+                    senderName = ChatBox.formattedUserName(farmer);
+                    // Add the separator that the game adds
+                    senderName += ": ";
+                }
+            }
+
+            if (!string.IsNullOrEmpty(senderName))
+            {
+                SenderNames.Add(lastMsg, senderName);
+            }
+        }
+    }
+
+    #endregion
+
+    #region URL and Bold Name Rendering
 
     /// <summary>
     ///     Patch to render URLs with special formatting and track their bounds
-    ///     Detects URLs during drawing rather than parsing to avoid myLength issues
+    ///     Also renders sender name in bold
     /// </summary>
     [HarmonyPatch(typeof(ChatMessage), "draw")]
     public class DrawMessagePatch
@@ -88,8 +138,13 @@ internal class ChatUrlPatches
             // Check if this message has URLs (using cache or scanning)
             bool hasUrls = MessagesWithUrls.Contains(__instance);
 
-            if (!hasUrls)
-                // Not in cache - scan for URLs
+            // Check if we have a sender name to bold
+            bool hasSenderName = SenderNames.TryGetValue(__instance, out string? senderName);
+
+            if (!hasUrls && !hasSenderName)
+            {
+                // Not in cache - scan for URLs to decide if we need to take over drawing
+                // We ALWAYS take over if we need to bold the name, but if we don't know yet:
                 foreach (ChatSnippet? snippet in __instance.message)
                 {
                     if (snippet.message == null || !UrlRegex.IsMatch(snippet.message)) continue;
@@ -97,8 +152,10 @@ internal class ChatUrlPatches
                     MessagesWithUrls.Add(__instance);
                     break;
                 }
+            }
 
-            if (!hasUrls) return true; // Use original method
+            // If no URLs and no name to bold, use original method
+            if (!hasUrls && !hasSenderName) return true;
 
             // Clear URL regions for this message
             ActiveUrlRegions.RemoveAll(r => r.Message == __instance);
@@ -106,6 +163,11 @@ internal class ChatUrlPatches
             float xPositionSoFar = 0f;
             float yPositionSoFar = 0f;
             SpriteFont? font = ChatBox.messageFont(__instance.language);
+            if (font is null) return true;
+
+            // Track how much text we've drawn to know when we are inside the sender name
+            int charactersDrawnSoFar = 0;
+            int senderNameLength = senderName?.Length ?? 0;
 
             for (int i = 0; i < __instance.message.Count; i++)
             {
@@ -119,6 +181,11 @@ internal class ChatUrlPatches
                         new Rectangle(snippet.emojiIndex * 9 % ChatBox.emojiTexture.Width,
                             snippet.emojiIndex * 9 / ChatBox.emojiTexture.Width * 9, 9, 9),
                         Color.White * __instance.alpha, 0f, Vector2.Zero, 4f, SpriteEffects.None, 0.99f);
+
+                    // Emojis don't count towards character count for name bolding (names generally don't have emojis in this context? actually they can)
+                    // But formattedUserName just returns the string name. If emojis are in the name, they are part of the string? 
+                    // Stardew names are simple strings. The chat snippet splitting might separate them.
+                    // Assuming for now name is text. If name has emoji it's complicated.
                 }
                 else if (snippet.message != null)
                 {
@@ -130,87 +197,79 @@ internal class ChatUrlPatches
                     }
                     else
                     {
-                        // Check if this snippet contains URL(s)
-                        MatchCollection matches = UrlRegex.Matches(snippet.message);
+                        // Logic to handle bolding part of the text
+                        // We need to know which part of this snippet is within 'senderNameLength'
 
-                        if (matches.Count > 0)
+                        string currentText = snippet.message;
+                        bool snippetHasUrl = UrlRegex.IsMatch(currentText);
+
+                        if (snippetHasUrl)
                         {
-                            // This text contains URLs - draw it piece by piece
+                            // Fallback to URL logic, but we lose bolding for URLs (URLs in name? unlikely)
+                            // Ideally we mix both, but complexity rises.
+                            // Use the existing URL loop but add bolding check
+                            MatchCollection matches = UrlRegex.Matches(currentText);
                             int lastIndex = 0;
 
                             foreach (Match match in matches)
                             {
-                                // Draw text before URL (if any)
                                 if (match.Index > lastIndex)
                                 {
-                                    string beforeUrl = snippet.message.Substring(lastIndex, match.Index - lastIndex);
-                                    b.DrawString(font, beforeUrl,
-                                        new Vector2(x + xPositionSoFar, y + yPositionSoFar),
-                                        __instance.color * __instance.alpha, 0f, Vector2.Zero, 1f, SpriteEffects.None,
-                                        0.99f);
+                                    string beforeUrl = currentText.Substring(lastIndex, match.Index - lastIndex);
+                                    DrawTextWithBold(b, font, beforeUrl, x + xPositionSoFar, y + yPositionSoFar,
+                                        __instance.color * __instance.alpha, charactersDrawnSoFar, senderNameLength);
                                     xPositionSoFar += font.MeasureString(beforeUrl).X;
+                                    charactersDrawnSoFar += beforeUrl.Length;
                                 }
 
-                                // Draw URL with special formatting
                                 string url = match.Value;
                                 Vector2 textSize = font.MeasureString(url);
                                 Vector2 position = new(x + xPositionSoFar, y + yPositionSoFar);
+                                Color urlColor = new Color(100, 149, 237) * __instance.alpha;
 
-                                // Draw URL in a different color (light blue)
-                                Color urlColor = new Color(100, 149, 237) * __instance.alpha; // Cornflower blue
+                                // Draw URL (never bold)
                                 b.DrawString(font, url, position, urlColor, 0f, Vector2.Zero, 1f, SpriteEffects.None,
                                     0.99f);
 
-                                // Draw underline
-                                Rectangle underline = new(
-                                    (int)position.X,
-                                    (int)(position.Y + textSize.Y - 2),
-                                    (int)textSize.X,
-                                    1
-                                );
+                                Rectangle underline = new((int)position.X, (int)(position.Y + textSize.Y - 2),
+                                    (int)textSize.X, 1);
                                 b.Draw(Game1.staminaRect, underline, urlColor);
 
-                                // Track this URL region for clicking
                                 ActiveUrlRegions.Add(new UrlRegion
                                 {
                                     Url = url,
-                                    Bounds = new Rectangle(
-                                        (int)position.X,
-                                        (int)position.Y,
-                                        (int)textSize.X,
-                                        (int)textSize.Y
-                                    ),
+                                    Bounds = new Rectangle((int)position.X, (int)position.Y, (int)textSize.X,
+                                        (int)textSize.Y),
                                     Message = __instance
                                 });
 
                                 xPositionSoFar += textSize.X;
+                                charactersDrawnSoFar += url.Length;
                                 lastIndex = match.Index + match.Length;
                             }
 
-                            // Draw remaining text after last URL (if any)
-                            if (lastIndex < snippet.message.Length)
+                            if (lastIndex < currentText.Length)
                             {
-                                string afterUrl = snippet.message[lastIndex..];
-                                b.DrawString(font, afterUrl,
-                                    new Vector2(x + xPositionSoFar, y + yPositionSoFar),
-                                    __instance.color * __instance.alpha, 0f, Vector2.Zero, 1f, SpriteEffects.None,
-                                    0.99f);
+                                string afterUrl = currentText[lastIndex..];
+                                DrawTextWithBold(b, font, afterUrl, x + xPositionSoFar, y + yPositionSoFar,
+                                    __instance.color * __instance.alpha, charactersDrawnSoFar, senderNameLength);
                                 xPositionSoFar += font.MeasureString(afterUrl).X;
+                                charactersDrawnSoFar += afterUrl.Length;
                             }
                         }
                         else
                         {
-                            // Draw normal text (no URLs)
-                            b.DrawString(font, snippet.message,
-                                new Vector2(x + xPositionSoFar, y + yPositionSoFar),
-                                __instance.color * __instance.alpha, 0f, Vector2.Zero, 1f, SpriteEffects.None, 0.99f);
-                            xPositionSoFar += snippet.myLength;
+                            // Normal text, potentially bold
+                            DrawTextWithBold(b, font, currentText, x + xPositionSoFar, y + yPositionSoFar,
+                                __instance.color * __instance.alpha, charactersDrawnSoFar, senderNameLength);
+                            xPositionSoFar +=
+                                snippet.myLength; // DrawTextWithBold doesn't return width, rely on snippet
+                            charactersDrawnSoFar += currentText.Length;
                         }
                     }
                 }
                 else
                 {
-                    // Advance by the snippet's length if we didn't draw anything
                     xPositionSoFar += snippet.myLength;
                 }
 
@@ -225,6 +284,44 @@ internal class ChatUrlPatches
             }
 
             return false; // Skip original method
+        }
+
+        private static void DrawTextWithBold(SpriteBatch b, SpriteFont font, string text, float x, float y, Color color,
+            int startIndex, int boldLength)
+        {
+            Color darkerGray = new Color(180, 180, 180, 255);
+            if (startIndex >= boldLength)
+            {
+                // All normal
+                b.DrawString(font, text, new Vector2(x, y), color, 0f, Vector2.Zero, 1f, SpriteEffects.None, 0.99f);
+            }
+            else if (startIndex + text.Length <= boldLength)
+            {
+                // All bold (Title/Sender) - Use colored shadow for emphasis
+                Color shadowColor = Utility.MultiplyColor(color, darkerGray);
+                Utility.drawTextWithColoredShadow(b, text, font, new Vector2(x, y), color, shadowColor, 1.09375f, -.5f,
+                    2,
+                    2,
+                    3);
+            }
+            else
+            {
+                // Mixed
+                int splitIndex = boldLength - startIndex;
+                string boldPart = text.Substring(0, splitIndex);
+                string normalPart = text.Substring(splitIndex);
+
+                // Draw bold part
+                Color shadowColor = Utility.MultiplyColor(color, darkerGray);
+                Utility.drawTextWithColoredShadow(b, boldPart, font, new Vector2(x, y), color, shadowColor, 1.0625f,
+                    .99f,
+                    2, 2, 3);
+
+                // Draw normal part
+                float boldWidth = font.MeasureString(boldPart).X;
+                b.DrawString(font, normalPart, new Vector2(x + boldWidth, y), color, 0f, Vector2.Zero, 1f,
+                    SpriteEffects.None, 0.99f);
+            }
         }
     }
 
@@ -306,6 +403,44 @@ internal class ChatUrlPatches
             Game1.mouseCursor = Game1.cursor_gamepad_pointer;
         }
     }
+
+    //Thinking we will need to override the bottom part, changing 888 to 864 or
+    /* Base code from decompiled source:
+    public void draw(SpriteBatch b, int x, int y)
+    {
+        float xPositionSoFar = 0f;
+        float yPositionSoFar = 0f;
+        for (int i = 0; i < message.Count; i++)
+        {
+            if (message[i].emojiIndex != -1)
+            {
+                b.Draw(ChatBox.emojiTexture, new Vector2((float)x + xPositionSoFar + 1f, (float)y + yPositionSoFar - 4f), new Rectangle(message[i].emojiIndex * 9 % ChatBox.emojiTexture.Width, message[i].emojiIndex * 9 / ChatBox.emojiTexture.Width * 9, 9, 9), Color.White * alpha, 0f, Vector2.Zero, 4f, SpriteEffects.None, 0.99f);
+            }
+            else if (message[i].message != null)
+            {
+                if (message[i].message.Equals(Environment.NewLine))
+                {
+                    xPositionSoFar = 0f;
+                    yPositionSoFar += ChatBox.messageFont(language).MeasureString("(").Y;
+                }
+                else
+                {
+                    b.DrawString(ChatBox.messageFont(language), message[i].message, new Vector2((float)x + xPositionSoFar, (float)y + yPositionSoFar), color * alpha, 0f, Vector2.Zero, 1f, SpriteEffects.None, 0.99f);
+                }
+            }
+            xPositionSoFar += message[i].myLength;
+            if (xPositionSoFar >= 888f)
+            {
+                xPositionSoFar = 0f;
+                yPositionSoFar += ChatBox.messageFont(language).MeasureString("(").Y;
+                if (message.Count > i + 1 && message[i + 1].message != null && message[i + 1].message.Equals(Environment.NewLine))
+                {
+                    i++;
+                }
+            }
+        }
+    }
+    */
 
     #endregion
 }
