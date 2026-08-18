@@ -8,7 +8,7 @@ Stardew's chat box stops accepting input once your text reaches the edge of the
 box, keeps only a handful of messages, and offers no way to move the cursor,
 select text, or fix a typo in the middle of a sentence. This fixes all of that.
 
-![Selecting, cutting, pasting and undoing text in the chat box](docs/images/editing.gif)
+![Cutting, copying and pasting text, and selecting it all with Ctrl+A](docs/images/clipboard.gif)
 
 ## Features
 
@@ -28,6 +28,8 @@ there.
 or press <kbd>Ctrl</kbd>+<kbd>A</kbd>.
 
 **Undo and redo.** <kbd>Ctrl</kbd>+<kbd>Z</kbd> and <kbd>Ctrl</kbd>+<kbd>Y</kbd>.
+
+![Undoing and redoing edits, then selecting text by dragging](docs/images/undo-redo.gif)
 
 **Clipboard.** <kbd>Ctrl</kbd>+<kbd>C</kbd>, <kbd>Ctrl</kbd>+<kbd>X</kbd> and
 <kbd>Ctrl</kbd>+<kbd>V</kbd>. Every keybind above is rebindable.
