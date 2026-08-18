@@ -108,20 +108,23 @@ public sealed class ModEntry : Mod
             save: () => Helper.WriteConfig(Config)
         );
 
-        RegisterGeneralSettings(api);
-        RegisterFeatureToggles(api);
-        RegisterInputSettings(api);
+        RegisterMessageSettings(api);
+        RegisterEditingSettings(api);
+        RegisterAppearanceSettings(api);
+        RegisterLinkSettings(api);
         RegisterKeybinds(api);
 
         Monitor.Log("Registered configuration options with Generic Mod Config Menu.", LogLevel.Trace);
     }
 
-    /// <summary>
-    /// Registers general settings (message length, history size) with GMCM.
-    /// </summary>
-    private void RegisterGeneralSettings(IGenericModConfigMenuApi api)
+    /// <summary>Message length and how much scrollback is kept.</summary>
+    private void RegisterMessageSettings(IGenericModConfigMenuApi api)
     {
         var t = Helper.Translation;
+
+        api.AddSectionTitle(ModManifest,
+            () => t.Get("config.section.messages.name"),
+            () => t.Get("config.section.messages.desc"));
 
         api.AddNumberOption(
             manifest: ModManifest,
@@ -144,12 +147,14 @@ public sealed class ModEntry : Mod
         );
     }
 
-    /// <summary>
-    /// Registers feature toggle options (scrolling, cursor control, URL clicking) with GMCM.
-    /// </summary>
-    private void RegisterFeatureToggles(IGenericModConfigMenuApi api)
+    /// <summary>Cursor movement, selection and key repeat.</summary>
+    private void RegisterEditingSettings(IGenericModConfigMenuApi api)
     {
         var t = Helper.Translation;
+
+        api.AddSectionTitle(ModManifest,
+            () => t.Get("config.section.editing.name"),
+            () => t.Get("config.section.editing.desc"));
 
         api.AddBoolOption(
             manifest: ModManifest,
@@ -166,41 +171,6 @@ public sealed class ModEntry : Mod
             getValue: () => Config.EnableCursorControl,
             setValue: value => Config.EnableCursorControl = value
         );
-        api.AddBoolOption(
-            manifest: ModManifest,
-            name: () => t.Get("config.enableMessageColorButton.name"),
-            tooltip: () => t.Get("config.enableMessageColorButton.tooltip"),
-            getValue: () => Config.EnableMessageColorButton,
-            setValue: value => Config.EnableMessageColorButton = value
-        );
-        api.AddBoolOption(
-            manifest: ModManifest,
-            name: () => t.Get("config.allowUrlClickWhenChatClosed.name"),
-            tooltip: () => t.Get("config.allowUrlClickWhenChatClosed.tooltip"),
-            getValue: () => Config.AllowUrlClickWhenChatClosed,
-            setValue: value => Config.AllowUrlClickWhenChatClosed = value
-        );
-
-        api.AddTextOption(
-            manifest: ModManifest,
-            name: () => t.Get("config.linkClickBehavior.name"),
-            tooltip: () => t.Get("config.linkClickBehavior.tooltip"),
-            getValue: () => Config.LinkClickBehavior.ToString(),
-            setValue: value => Config.LinkClickBehavior =
-                Enum.TryParse(value, out LinkClickAction parsed) ? parsed : LinkClickAction.Copy,
-            allowedValues: new[] { nameof(LinkClickAction.Copy), nameof(LinkClickAction.Open) },
-            formatAllowedValue: value => value == nameof(LinkClickAction.Open)
-                ? t.Get("config.linkClickBehavior.open")
-                : t.Get("config.linkClickBehavior.copy")
-        );
-    }
-
-    /// <summary>
-    /// Registers keyboard input settings (repeat delays) with GMCM.
-    /// </summary>
-    private void RegisterInputSettings(IGenericModConfigMenuApi api)
-    {
-        var t = Helper.Translation;
 
         api.AddNumberOption(
             manifest: ModManifest,
@@ -225,12 +195,63 @@ public sealed class ModEntry : Mod
         );
     }
 
-    /// <summary>
-    /// Registers all keybind options (copy, paste, undo, etc.) with GMCM.
-    /// </summary>
+    /// <summary>What the chat box displays alongside the text.</summary>
+    private void RegisterAppearanceSettings(IGenericModConfigMenuApi api)
+    {
+        var t = Helper.Translation;
+
+        api.AddSectionTitle(ModManifest,
+            () => t.Get("config.section.appearance.name"),
+            () => t.Get("config.section.appearance.desc"));
+
+        api.AddBoolOption(
+            manifest: ModManifest,
+            name: () => t.Get("config.enableMessageColorButton.name"),
+            tooltip: () => t.Get("config.enableMessageColorButton.tooltip"),
+            getValue: () => Config.EnableMessageColorButton,
+            setValue: value => Config.EnableMessageColorButton = value
+        );
+    }
+
+    /// <summary>How links in chat behave.</summary>
+    private void RegisterLinkSettings(IGenericModConfigMenuApi api)
+    {
+        var t = Helper.Translation;
+
+        api.AddSectionTitle(ModManifest,
+            () => t.Get("config.section.links.name"),
+            () => t.Get("config.section.links.desc"));
+
+        api.AddBoolOption(
+            manifest: ModManifest,
+            name: () => t.Get("config.allowUrlClickWhenChatClosed.name"),
+            tooltip: () => t.Get("config.allowUrlClickWhenChatClosed.tooltip"),
+            getValue: () => Config.AllowUrlClickWhenChatClosed,
+            setValue: value => Config.AllowUrlClickWhenChatClosed = value
+        );
+
+        api.AddTextOption(
+            manifest: ModManifest,
+            name: () => t.Get("config.linkClickBehavior.name"),
+            tooltip: () => t.Get("config.linkClickBehavior.tooltip"),
+            getValue: () => Config.LinkClickBehavior.ToString(),
+            setValue: value => Config.LinkClickBehavior =
+                Enum.TryParse(value, out LinkClickAction parsed) ? parsed : LinkClickAction.Copy,
+            allowedValues: new[] { nameof(LinkClickAction.Copy), nameof(LinkClickAction.Open) },
+            formatAllowedValue: value => value == nameof(LinkClickAction.Open)
+                ? t.Get("config.linkClickBehavior.open")
+                : t.Get("config.linkClickBehavior.copy")
+        );
+    }
+
+    /// <summary>Shortcuts available while the chat box is open.</summary>
     private void RegisterKeybinds(IGenericModConfigMenuApi api)
     {
         var t = Helper.Translation;
+
+        api.AddSectionTitle(ModManifest,
+            () => t.Get("config.section.keybinds.name"),
+            () => t.Get("config.section.keybinds.desc"));
 
         api.AddKeybindList(
             manifest: ModManifest,
