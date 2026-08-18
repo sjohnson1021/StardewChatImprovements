@@ -118,7 +118,7 @@ public static class TextHelper
         {
             int splitIndex = FindSplitIndex(remainingWord, font, width);
             
-            result.Append(remainingWord.Substring(0, splitIndex));
+            result.Append(remainingWord.AsSpan(0, splitIndex));
             result.AppendLine();
             
             remainingWord = remainingWord.Substring(splitIndex);
@@ -180,7 +180,7 @@ public static class TextHelper
             }
             else if (snippet.message != null)
             {
-                if (snippet.message.Equals(Environment.NewLine))
+                if (snippet.message.Equals(Environment.NewLine, StringComparison.Ordinal))
                 {
                     // Explicit newline - reset x position and add line
                     xPositionSoFar = 0f;
@@ -202,7 +202,7 @@ public static class TextHelper
                 // If next snippet is a newline, skip it (same as draw method)
                 if (i + 1 < message.message.Count &&
                     message.message[i + 1].message != null &&
-                    message.message[i + 1].message.Equals(Environment.NewLine))
+                    message.message[i + 1].message.Equals(Environment.NewLine, StringComparison.Ordinal))
                 {
                     i++;
                 }

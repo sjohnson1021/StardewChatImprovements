@@ -109,8 +109,8 @@ public interface IGenericModConfigMenuApi
     ///     randomized ID.
     /// </param>
     void AddNumberOption(IManifest manifest, Func<float> getValue, Action<float> setValue, Func<string> name,
-        Func<string> tooltip = null, float? min = null, float? max = null, float? interval = null,
-        Func<float, string> formatValue = null, string fieldId = null);
+        Func<string>? tooltip = null, float? min = null, float? max = null, float? interval = null,
+        Func<float, string>? formatValue = null, string? fieldId = null);
 
     /// <summary>Add a string option at the current position in the form.</summary>
     /// <param name="mod">The mod's manifest.</param>

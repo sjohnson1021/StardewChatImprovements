@@ -28,7 +28,11 @@ internal class ChatBoxScrollPatches
         public int LastChatBoxWidth { get; set; }
         public int LastEmojiIconY { get; set; }
 
+        // Analyzer suggests making this static; it stays an instance member so ScrollState
+        // reads as a single unit of per-chat-box state.
+#pragma warning disable CA1822
         public int MaxMessages => ModEntry.Instance?.Config.MaxChatHistory ?? 100;
+#pragma warning restore CA1822
     }
 
     private static ScrollState GetScrollState(ChatBox chatBox)
@@ -134,7 +138,7 @@ internal class ChatBoxScrollPatches
                             new Rectangle(119, 469, 16, 16),
                             3f)
                         {
-                            hoverText = ModEntry.Instance.Helper.Translation.Get("ui.colorPickerButton.tooltip")
+                            hoverText = ModEntry.Instance?.Helper.Translation.Get("ui.colorPickerButton.tooltip") ?? "Message Color"
                         };
                     }
 

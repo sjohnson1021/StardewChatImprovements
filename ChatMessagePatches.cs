@@ -301,7 +301,7 @@ internal class ChatMessagePatches
                 }
                 else if (snippet.message != null)
                 {
-                    if (snippet.message.Equals(Environment.NewLine))
+                    if (snippet.message.Equals(Environment.NewLine, StringComparison.Ordinal))
                     {
                         tokens.Add(new RichTextToken { IsNewLine = true });
                     }
