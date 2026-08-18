@@ -134,13 +134,18 @@ The mod compiles against Stardew Valley's own assemblies, so you need the game
 installed.
 
 ```bash
-dotnet build
+dotnet build                 # for development
+dotnet build -c Release      # for a release you intend to publish
 ```
 
 [ModBuildConfig](https://github.com/Pathoschild/SMAPI/blob/develop/docs/technical/mod-package.md)
-finds the game automatically, builds a release zip into `bin/`, and copies the
-mod into your `Mods` folder. If your game is in a non-standard location, see
-[custom game paths](https://smapi.io/package/custom-game-path).
+finds the game automatically, zips the mod into `bin/<configuration>/net6.0/`,
+and copies it into your `Mods` folder. If your game is in a non-standard
+location, see [custom game paths](https://smapi.io/package/custom-game-path).
+
+Build `Release` for anything you distribute. It is optimised, omits debug
+metadata, and is the configuration that packages `manifest.json`, `i18n/` and
+`assets/` into the zip.
 
 String keys in `i18n/default.json` generate a strongly-typed `I18n` class at
 build time, so a renamed or missing key is a compile error rather than a blank
