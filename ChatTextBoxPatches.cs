@@ -160,7 +160,10 @@ internal class ChatTextBoxPatches
     private static int CalculateCursorFromClick(ChatBox chatBox, int x, TextBoxState s)
     {
         float clickX = x - chatBox.chatBox.X - TextBoxPadding + s.ScrollOffset;
-        ChatMessage msg = new();
+        // language must be set BEFORE parsing: ChatSnippet measures itself with
+        // messageFont(language), and the default (en) has different metrics to the
+        // font this text is actually drawn with in ja/ko/zh/ru.
+        ChatMessage msg = new() { language = LocalizedContentManager.CurrentLanguageCode };
         msg.parseMessageForEmoji(s.FullText);
         SpriteFont? font = ChatBox.messageFont(LocalizedContentManager.CurrentLanguageCode);
         if (font == null) return s.FullText.Length;
@@ -721,7 +724,9 @@ internal class ChatTextBoxPatches
 
             float visibleWidth = __instance.Width - TextBoxWidthPadding;
 
-            ChatMessage msg = new();
+            // language must be set BEFORE parsing, so snippet widths are measured with the
+            // same font the text is drawn with. Otherwise the caret drifts in ja/ko/zh/ru.
+            ChatMessage msg = new() { language = lang };
             msg.parseMessageForEmoji(s.FullText);
 
             float cursorPixel = CalculateCursorPixelPosition(msg.message, s.CursorIndex, font);
