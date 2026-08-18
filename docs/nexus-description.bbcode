@@ -1,0 +1,79 @@
+[size=5]Chat Improvements[/size]
+
+Stardew's chat box stops accepting input the moment your text reaches the edge of the box. There's no cursor, no way to select text, no copy or paste, no undo, and no way to fix a typo in the middle of a sentence without deleting everything after it. Scroll back more than a few messages and they're simply gone.
+
+This mod turns it into a proper text field.
+
+[line]
+
+[size=4]What it does[/size]
+
+[b]Longer messages[/b] — type up to 1,000 characters (500 by default) instead of being cut off at the width of the box. The text scrolls sideways as you type.
+
+[b]Scrollback[/b] — keeps up to 500 messages (100 by default) and lets you scroll through them with the mouse wheel.
+
+[b]A working cursor[/b] — arrow keys, Home and End move the cursor, and holding a key repeats it. Click anywhere in the box to put the cursor there.
+
+[b]Text selection[/b] — hold Shift with the arrow keys, click and drag, or press Ctrl+A.
+
+[b]Undo and redo[/b] — Ctrl+Z and Ctrl+Y while composing.
+
+[b]Copy, cut and paste[/b] — Ctrl+C, Ctrl+X and Ctrl+V. Every keybind is rebindable.
+
+[b]Word-wise editing[/b] — Ctrl with the arrow keys jumps by word. Ctrl+Backspace and Ctrl+Delete delete by word.
+
+[b]Message colours[/b] — a colour button beside the chat box lets you choose the colour your messages send in, and your text previews in that colour as you type.
+
+[b]Clickable links[/b] — URLs in chat are highlighted and underlined, and open in your browser when you click them.
+
+[b]Emoji-aware[/b] — the cursor treats an emoji as a single character, so arrow keys step over it and backspace removes the whole thing instead of half a tag.
+
+[line]
+
+[size=4]Works in your language[/size]
+
+The cursor moves by character as your language actually defines it, rather than by raw bytes. Combining marks, Korean jamo and multi-codepoint emoji stay attached to their base character while you edit — no more backspace deleting half a letter, or eleven presses to remove one emoji.
+
+Text is also measured with the same font it's drawn with, so the caret stays lined up with your text in Japanese, Korean, Chinese and Russian, where the game uses a different font from English.
+
+Every piece of text the mod shows you is translatable, and [b]translations are very welcome[/b]. Only English ships today. If you'd like to add your language it's a single small file, and partial translations work fine — anything you don't translate falls back to English. Details are in the GitHub repository.
+
+[line]
+
+[size=4]Installing[/size]
+
+[list=1]
+[*]Install [url=https://smapi.io/]SMAPI[/url] 4.0.0 or newer.
+[*]Download this mod and unzip it into your [b]Stardew Valley/Mods[/b] folder.
+[*]Run the game using SMAPI.
+[/list]
+
+[url=https://www.nexusmods.com/stardewvalley/mods/5098]Generic Mod Config Menu[/url] is optional but recommended — it lets you change every setting from the in-game menu instead of editing a file.
+
+[line]
+
+[size=4]Settings[/size]
+
+Everything is configurable: the message length limit, how much scrollback to keep, whether horizontal scrolling, cursor control and the colour button are on, how fast held keys repeat, and all six keybinds.
+
+One setting worth knowing about: [b]clicking links while the chat box is closed[/b] is [b]off by default[/b]. The mod doesn't swallow the click, so a click on a link with chat closed would also swing your tool. Turn it on if you'd rather have links always clickable.
+
+[line]
+
+[size=4]Compatibility[/size]
+
+[list]
+[*]Stardew Valley 1.6+, SMAPI 4.0.0+
+[*]Single player and multiplayer. This is client-side — other players don't need it, and they'll see your longer messages normally.
+[*]Windows, macOS and Linux.
+[*][b]Will likely conflict[/b] with other mods that change how the chat box draws or handles input.
+[/list]
+
+[line]
+
+[size=4]Reporting a problem[/size]
+
+Please include your SMAPI log (upload it at [url=https://smapi.io/log]smapi.io/log[/url]) and mention which language you play in — some issues only show up in specific languages.
+
+Source code and issue tracker: [url=https://github.com/sjohnson1021/StardewChatImprovements]github.com/sjohnson1021/StardewChatImprovements[/url]
+Released under the MIT license.

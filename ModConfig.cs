@@ -66,7 +66,11 @@ public sealed class ModConfig
     /// If false, URLs can only be clicked when the chat box is open.
     /// Default: true.
     /// </summary>
-    public bool AllowUrlClickWhenChatClosed { get; set; } = true;
+    /// <remarks>
+    ///     Off by default: the mod does not consume the click, so clicking a link with the chat
+    ///     box closed also performs the normal game action underneath it.
+    /// </remarks>
+    public bool AllowUrlClickWhenChatClosed { get; set; }
 
     #endregion
 

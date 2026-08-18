@@ -420,8 +420,9 @@ internal class ChatTextBoxPatches
                     }
                     else
                     {
-                        s.FullText = s.FullText.Remove(--s.CursorIndex, 1);
-                        s.SelectionStart = s.SelectionEnd = s.CursorIndex;
+                        int prev = TextHelper.PrevGrapheme(s.FullText, s.CursorIndex);
+                        s.FullText = s.FullText.Remove(prev, s.CursorIndex - prev);
+                        s.CursorIndex = s.SelectionStart = s.SelectionEnd = prev;
                     }
                 }
                 s.CharsSinceSnapshot++;
@@ -578,7 +579,7 @@ internal class ChatTextBoxPatches
             switch (key)
             {
                 case Keys.Left:
-                    newCursor = ctrl ? GetPrevSegmentStart(s.FullText, s.CursorIndex) : Math.Max(0, s.CursorIndex - 1);
+                    newCursor = ctrl ? GetPrevSegmentStart(s.FullText, s.CursorIndex) : TextHelper.PrevGrapheme(s.FullText, s.CursorIndex);
                     // If we would land inside an emoji, snap to the start so we never end up between brackets
                     int snappedLeft = EmojiHelper.SnapToBoundary(s.FullText, newCursor, -1);
                     if (snappedLeft != newCursor)
@@ -588,7 +589,7 @@ internal class ChatTextBoxPatches
                     s.LastLeftPress = Game1.currentGameTime.TotalGameTime.TotalSeconds;
                     break;
                 case Keys.Right:
-                    newCursor = ctrl ? GetNextSegmentEnd(s.FullText, s.CursorIndex) : Math.Min(s.FullText.Length, s.CursorIndex + 1);
+                    newCursor = ctrl ? GetNextSegmentEnd(s.FullText, s.CursorIndex) : TextHelper.NextGrapheme(s.FullText, s.CursorIndex);
                     // If we would land inside an emoji, snap to the end so we never end up between brackets
                     int snappedRight = EmojiHelper.SnapToBoundary(s.FullText, newCursor, 1);
                     if (snappedRight != newCursor)
@@ -643,7 +644,8 @@ internal class ChatTextBoxPatches
                             }
                             else
                             {
-                                s.FullText = s.FullText.Remove(s.CursorIndex, 1);
+                                int next = TextHelper.NextGrapheme(s.FullText, s.CursorIndex);
+                                s.FullText = s.FullText.Remove(s.CursorIndex, next - s.CursorIndex);
                                 s.CursorIndex = s.SelectionStart = s.SelectionEnd = Math.Clamp(s.CursorIndex, 0, s.FullText.Length);
                             }
                         }
@@ -903,14 +905,14 @@ internal class ChatTextBoxPatches
 
             HandleRepeat(keys.IsKeyDown(Keys.Left), now, initDelay, repDelay, ref s.LastLeftPress, ref s.LastLeftRepeat, () =>
             {
-                int nc = ctrl ? GetPrevSegmentStart(s.FullText, s.CursorIndex) : Math.Max(0, s.CursorIndex - 1);
+                int nc = ctrl ? GetPrevSegmentStart(s.FullText, s.CursorIndex) : TextHelper.PrevGrapheme(s.FullText, s.CursorIndex);
                 int snapped = EmojiHelper.SnapToBoundary(s.FullText, nc, -1);
                 UpdateSelection(s, snapped, shift);
             });
 
             HandleRepeat(keys.IsKeyDown(Keys.Right), now, initDelay, repDelay, ref s.LastRightPress, ref s.LastRightRepeat, () =>
             {
-                int nc = ctrl ? GetNextSegmentEnd(s.FullText, s.CursorIndex) : Math.Min(s.FullText.Length, s.CursorIndex + 1);
+                int nc = ctrl ? GetNextSegmentEnd(s.FullText, s.CursorIndex) : TextHelper.NextGrapheme(s.FullText, s.CursorIndex);
                 int snapped = EmojiHelper.SnapToBoundary(s.FullText, nc, 1);
                 UpdateSelection(s, snapped, shift);
             });

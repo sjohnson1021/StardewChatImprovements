@@ -1,0 +1,67 @@
+name: Validate
+
+on:
+  push:
+    branches: [ master, main ]
+  pull_request:
+  workflow_dispatch:
+
+# The mod compiles against Stardew Valley's own assemblies, which can't legally be
+# published to CI, so this workflow validates the things that *can* be checked
+# without the game: manifest correctness and translation files. Most contributions
+# to a mod repo are translation PRs, and broken JSON is the usual failure.
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate manifest.json
+        run: |
+          python3 - <<'PY'
+          import json, sys
+
+          manifest = json.load(open("manifest.json"))
+          required = ["Name", "Author", "Version", "Description", "UniqueID", "EntryDll", "MinimumApiVersion"]
+          missing = [key for key in required if not manifest.get(key)]
+          if missing:
+              sys.exit(f"manifest.json is missing: {', '.join(missing)}")
+
+          if not manifest.get("UpdateKeys"):
+              sys.exit("manifest.json has no UpdateKeys, so players get no update alerts.")
+
+          print(f"manifest.json ok - {manifest['Name']} {manifest['Version']}")
+          PY
+
+      - name: Validate translations
+        run: |
+          python3 - <<'PY'
+          import json, glob, sys
+
+          with open("i18n/default.json", encoding="utf-8") as handle:
+              default = json.load(handle)
+
+          failures = []
+          for path in sorted(glob.glob("i18n/*.json")):
+              try:
+                  with open(path, encoding="utf-8") as handle:
+                      translation = json.load(handle)
+              except json.JSONDecodeError as error:
+                  failures.append(f"{path}: invalid JSON - {error}")
+                  continue
+
+              if path.endswith("default.json"):
+                  print(f"ok: {path} ({len(translation)} keys)")
+                  continue
+
+              unknown = sorted(set(translation) - set(default))
+              if unknown:
+                  failures.append(f"{path}: keys not present in default.json: {unknown}")
+
+              missing = len(set(default) - set(translation))
+              note = f", {missing} key(s) fall back to English" if missing else ""
+              print(f"ok: {path} ({len(translation)} keys{note})")
+
+          if failures:
+              sys.exit("\n".join(failures))
+          PY

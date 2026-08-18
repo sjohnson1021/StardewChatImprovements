@@ -1,0 +1,9 @@
+# Normalize line endings so contributors on different platforms don't produce
+# whole-file diffs.
+* text=auto eol=lf
+
+*.png binary
+*.jpg binary
+*.xnb binary
+*.dll binary
+*.zip binary

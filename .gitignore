@@ -13,3 +13,6 @@ qodana.yaml
 
 #Ignore insiders AI rules
 .github/instructions/codacy.instructions.md
+
+# SMAPI generates this per-user on first run; shipping it overwrites player settings
+config.json

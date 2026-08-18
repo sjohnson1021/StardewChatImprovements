@@ -242,6 +242,12 @@ internal class ChatMessagePatches
                 new Rectangle((int)position.X + 2, (int)(position.Y + textHeight - UnderlineYOffset), (int)token.Width - 4, 2),
                 urlColor);
 
+            // A message keeps being drawn after it has faded out, so only register a click
+            // target while it is actually visible. Otherwise invisible links stay clickable and
+            // a click aimed at the farm opens a browser.
+            if (msg.alpha <= 0.01f)
+                return;
+
             var region = new UrlRegion
             {
                 Url = token.Text,

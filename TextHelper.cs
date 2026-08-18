@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 using Microsoft.Xna.Framework.Graphics;
 using StardewValley;
@@ -9,6 +10,36 @@ public static class TextHelper
 {
     private const int WidthPadding = 14;
     private const float MaxLineWidth = 872f;
+
+    /// <summary>
+    ///     Index of the first grapheme cluster boundary after <paramref name="index" />.
+    /// </summary>
+    /// <remarks>
+    ///     Stepping by one <see cref="char" /> splits surrogate pairs and separates combining marks
+    ///     from their base character, corrupting text in Korean, Hindi, Vietnamese and emoji
+    ///     sequences. A family emoji is 11 chars but one character to the player.
+    /// </remarks>
+    public static int NextGrapheme(string text, int index)
+    {
+        if (index >= text.Length) return text.Length;
+        return index + StringInfo.GetNextTextElementLength(text.AsSpan(index));
+    }
+
+    /// <summary>Index of the last grapheme cluster boundary before <paramref name="index" />.</summary>
+    public static int PrevGrapheme(string text, int index)
+    {
+        if (index <= 0) return 0;
+
+        int pos = 0;
+        while (pos < text.Length)
+        {
+            int next = pos + StringInfo.GetNextTextElementLength(text.AsSpan(pos));
+            if (next >= index) return pos;
+            pos = next;
+        }
+
+        return pos;
+    }
 
     public static string ParseTextWithWrapping(string text, SpriteFont font, int width)
     {

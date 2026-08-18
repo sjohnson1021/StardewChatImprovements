@@ -2,12 +2,17 @@
   "Name": "Chat Improvements",
   "Author": "Sean Johnson",
   "Version": "1.0.0",
-  "Description": "Improves the chat box with longer messages and better editing.",
+  "Description": "A better chat box: longer messages, scrollback, full cursor and selection control, undo, copy/paste, message colours and clickable links.",
   "UniqueID": "sjohnson1021.ChatImprovements",
   "EntryDll": "ChatImprovements.dll",
   "MinimumApiVersion": "4.0.0",
-  "UpdateKeys": [],
+  "UpdateKeys": [
+    "GitHub:sjohnson1021/StardewChatImprovements"
+  ],
   "Dependencies": [
-    { "UniqueID": "spacechase0.GenericModConfigMenu", "IsRequired": false }
+    {
+      "UniqueID": "spacechase0.GenericModConfigMenu",
+      "IsRequired": false
+    }
   ]
 }
