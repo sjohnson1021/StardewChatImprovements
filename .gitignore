@@ -20,3 +20,11 @@ config.json
 # Raw captures kept locally; published copies live in docs/images/
 /Screencast_*.webm
 /ChatImprovements-*-Screenshot.png
+
+# Local tooling and working notes, kept out of the published repo
+.mcp.json
+.vscode/
+.codacy/
+dev-docs/
+code-quality-plan.md
+*.secondsave.code-workspace
