@@ -37,6 +37,17 @@ internal class ChatTextBoxPatches
 
     private static readonly Dictionary<ChatTextBox, TextBoxState> States = new();
 
+    /// <summary>Whether a drag-select that began inside <paramref name="chatBox" /> is still held.</summary>
+    internal static bool IsDragActive(ChatBox chatBox)
+    {
+        // Requiring the button to be genuinely down is a safety net, not just a nicety.
+        // This gates the screen-wide isWithinBounds override, so a stuck IsDragging would
+        // otherwise swallow every click in the game with no way back.
+        return States.TryGetValue(chatBox.chatBox, out TextBoxState? state)
+               && state.IsDragging
+               && Game1.input.GetMouseState().LeftButton == ButtonState.Pressed;
+    }
+
     private static TextBoxState GetState(ChatTextBox box)
     {
         if (States.TryGetValue(box, out TextBoxState? state))
@@ -446,6 +457,18 @@ internal class ChatTextBoxPatches
         private static bool Prefix(ChatBox __instance, int x, int y)
         {
             if (!__instance.chatBox.Selected) return false;
+
+            // Game1 re-fires the left click every few frames while the button is held
+            // (mouseClickPolling). During a drag those repeats must not press whatever the
+            // pointer happens to pass over, but they still have to be consumed here so they
+            // don't fall through to the world and swing the tool.
+            if (GetState(__instance.chatBox).IsDragging) return false;
+
+            // The colour button and its menu sit outside the text area but are reported as
+            // in-bounds so clicks reach the chat box at all. Leave them to their own patch:
+            // claiming them here moves the cursor and starts a drag, and the drag then makes
+            // the colour patch discard the very click that was meant to open it.
+            if (ChatBoxScrollPatches.IsOnColorControls(x, y)) return false;
 
             if (__instance.emojiMenuIcon.containsPoint(x, y))
             {
@@ -887,27 +910,50 @@ internal class ChatTextBoxPatches
         }
     }
 
+    /// <summary>
+    ///     <see cref="TextBox.Update" /> deselects whenever the pointer is outside the box, which
+    ///     would drop focus the moment a drag-select leaves it. Hold focus until the button is released.
+    /// </summary>
+    [HarmonyPatch(typeof(TextBox), nameof(TextBox.Update))]
+    public class TextBoxUpdatePatch
+    {
+        private static bool Prefix(TextBox __instance)
+        {
+            return __instance is not ChatTextBox box || !GetState(box).IsDragging;
+        }
+    }
+
     [HarmonyPatch(typeof(ChatBox), "update")]
     public class UpdatePatch
     {
         private static void Postfix(ChatBox __instance, GameTime time)
         {
-            if (!__instance.chatBox.Selected) return;
             TextBoxState s = GetState(__instance.chatBox);
-            CheckIdleSnapshot(s);
-
-            // Drag selection
             bool mousePressed = Game1.input.GetMouseState().LeftButton == ButtonState.Pressed;
+
+            // A drag that began inside the box captures the mouse until it is released.
+            // Keeping the box focused means leaving it mid-drag neither closes it nor lets
+            // the held click reach the world, since Game1 ignores world input while chat is
+            // active. Only a fresh press that starts outside should close it.
             if (s.IsDragging && mousePressed)
             {
-                int mouseX = (int)(Game1.getMousePosition().X / Game1.options.zoomLevel);
-                if (mouseX >= __instance.chatBox.X && mouseX <= __instance.chatBox.X + __instance.chatBox.Width - 72)
-                {
-                    s.CursorIndex = s.SelectionEnd = CalculateCursorFromClick(__instance, mouseX, s);
-                }
+                __instance.chatBox.Selected = true;
+
+                // Dragging past an edge extends the selection to that end rather than
+                // stalling, which is what every other text field does.
+                int left = __instance.chatBox.X;
+                int right = __instance.chatBox.X + __instance.chatBox.Width - (int)TextBoxWidthPadding;
+                int mouseX = Math.Clamp(Game1.getMouseX(ui_scale: true), left, right);
+
+                s.CursorIndex = s.SelectionEnd = CalculateCursorFromClick(__instance, mouseX, s);
             }
+
+            // Clear the drag on release even if focus was lost, so it can never latch on.
             if (s.WasMousePressed && !mousePressed) s.IsDragging = false;
             s.WasMousePressed = mousePressed;
+
+            if (!__instance.chatBox.Selected) return;
+            CheckIdleSnapshot(s);
 
             if (!(ModEntry.Instance?.Config.EnableCursorControl ?? false)) return;
 

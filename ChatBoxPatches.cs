@@ -35,6 +35,15 @@ internal class ChatBoxScrollPatches
 #pragma warning restore CA1822
     }
 
+    /// <summary>Whether a point is on the colour button or its open menu.</summary>
+    internal static bool IsOnColorControls(int x, int y)
+    {
+        if (_colorPickerButton != null && _colorPickerButton.containsPoint(x, y))
+            return true;
+
+        return _activeColorMenu != null && _activeColorMenu.isWithinBounds(x, y);
+    }
+
     private static ScrollState GetScrollState(ChatBox chatBox)
     {
         if (ScrollStates.TryGetValue(chatBox, out ScrollState? state)) return state;
@@ -364,6 +373,10 @@ internal class ChatBoxScrollPatches
         {
             if (!__instance.chatBox.Selected) return true;
 
+            // Harmony runs every prefix even after one returns false, so this needs the same
+            // drag guard: dragging across the colour button must not keep pressing it.
+            if (ChatTextBoxPatches.IsDragActive(__instance)) return false;
+
 
             // Handle Button Click
             if (_colorPickerButton != null)
@@ -371,6 +384,15 @@ internal class ChatBoxScrollPatches
                 if (_colorPickerButton.containsPoint(x, y))
                 {
                     Game1.playSound("drumkit6");
+
+                    // Opening one popup closes the other. The emoji icon already gets this
+                    // for free, because a click on it falls through to the menu-dismiss
+                    // branch below; the colour button returns before reaching it.
+                    if (__instance.choosingEmoji)
+                    {
+                        __instance.choosingEmoji = false;
+                        __instance.emojiMenuIcon.scale = 4f;
+                    }
 
                     if (_activeColorMenu != null)
                     {
@@ -418,6 +440,15 @@ internal class ChatBoxScrollPatches
         private static void Postfix(ChatBox __instance, int x, int y, ref bool __result)
         {
             if (__result) return;
+
+            // While dragging, claim the whole screen. Game1 only routes a click to the chat
+            // box when it reports the point as in-bounds; otherwise the click falls through
+            // to the world and swings the tool.
+            if (ChatTextBoxPatches.IsDragActive(__instance))
+            {
+                __result = true;
+                return;
+            }
 
             // Check Color Picker Button
             if (_colorPickerButton != null)
