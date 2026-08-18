@@ -1,0 +1,1 @@
+Stardew's chat box has no cursor, no text selection, no copy and paste, and cuts you off at the width of the box. This fixes all of it: longer messages, scrollback, undo and redo, message colours and clickable links. Rebindable and translatable.
