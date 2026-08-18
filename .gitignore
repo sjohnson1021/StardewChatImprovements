@@ -16,3 +16,7 @@ qodana.yaml
 
 # SMAPI generates this per-user on first run; shipping it overwrites player settings
 config.json
+
+# Raw captures kept locally; published copies live in docs/images/
+/Screencast_*.webm
+/ChatImprovements-*-Screenshot.png

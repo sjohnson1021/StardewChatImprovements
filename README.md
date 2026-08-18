@@ -8,7 +8,11 @@ Stardew's chat box stops accepting input once your text reaches the edge of the
 box, keeps only a handful of messages, and offers no way to move the cursor,
 select text, or fix a typo in the middle of a sentence. This fixes all of that.
 
+![Selecting, cutting, pasting and undoing text in the chat box](docs/images/editing.gif)
+
 ## Features
+
+![Long messages, scrollback, per-player colours and a clickable link](docs/images/chat-window.png)
 
 **Longer messages.** Type up to 1,000 characters (500 by default) instead of
 being cut off at the width of the box. The text scrolls sideways as you type.
@@ -36,9 +40,13 @@ delete by word.
 colour your messages are sent in, and your text previews in that colour as you
 type.
 
+![The message colour picker open beside the chat box](docs/images/color-picker.png)
+
 **Clickable links.** URLs in chat are highlighted and underlined. Clicking one
 copies it to your clipboard by default, or opens it in your browser if you
 prefer — links come from other players, so the safe option is the default.
+
+![Clicking a link copies it and confirms with an on-screen message](docs/images/link-copy.gif)
 
 **Emoji-aware.** The cursor treats an emoji as a single character, so arrow keys
 step over it and backspace removes the whole thing rather than half a tag.
@@ -66,6 +74,8 @@ menu instead of editing a file.
 
 Settings live in `config.json`, which SMAPI creates the first time you run the
 mod. With Generic Mod Config Menu installed you can change them in-game instead.
+
+![Every setting shown in the Generic Mod Config Menu](docs/images/settings.png)
 
 | Setting                       | Default           | Description                                                   |
 | ----------------------------- | ----------------- | ------------------------------------------------------------- |
