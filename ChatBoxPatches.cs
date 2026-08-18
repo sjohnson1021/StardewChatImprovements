@@ -217,12 +217,15 @@ internal class ChatBoxScrollPatches
             if (s_MessagesField.GetValue(__instance) is not List<ChatMessage> messages)
                 return true;
 
+
             if (__instance.chatBox.Selected)
             {
                 // Calculate heights
                 int totalHeight = CalculateTotalHeight(messages, true);
                 int visibleHeight = GetVisibleHeight(__instance);
-                int displayHeight = Math.Min(totalHeight, visibleHeight);
+                // Clamp: with no messages this is 0, and a scissor rectangle of height
+                // (displayHeight - 4) would be negative, which clips the whole chat away.
+                int displayHeight = Math.Max(0, Math.Min(totalHeight, visibleHeight));
 
                 // Draw background
                 if (totalHeight > 0)
@@ -234,6 +237,13 @@ internal class ChatBoxScrollPatches
                         __instance.chatBox.Width,
                         displayHeight + 20,
                         Color.White, 4f, drawShadow: false);
+                }
+
+                // Nothing to clip or draw yet; skip straight to the text box.
+                if (displayHeight <= 0)
+                {
+                    DrawChatBoxChrome(__instance, b);
+                    return false;
                 }
 
                 // Set up clipping
@@ -249,7 +259,7 @@ internal class ChatBoxScrollPatches
                     __instance.xPositionOnScreen,
                     __instance.yPositionOnScreen - displayHeight - 8,
                     __instance.chatBox.Width,
-                    displayHeight - 4
+                    Math.Max(1, displayHeight - 4)
                 );
 
                 b.GraphicsDevice.ScissorRectangle = scissor;
@@ -289,41 +299,7 @@ internal class ChatBoxScrollPatches
                 b.GraphicsDevice.ScissorRectangle = oldScissor;
                 b.Begin(SpriteSortMode.Deferred, BlendState.AlphaBlend, SamplerState.PointClamp, null, oldRaster);
 
-                // Draw text input and emoji menu
-                __instance.chatBox.Draw(b, drawShadow: false);
-                __instance.emojiMenuIcon.draw(b, Color.White, 0.99f);
-
-                if (__instance.choosingEmoji)
-                {
-                    __instance.emojiMenu.draw(b);
-                }
-
-                // Draw Color Picker Button
-                if (_colorPickerButton != null)
-                {
-                    _colorPickerButton.tryHover(Game1.getMouseX(), Game1.getMouseY());
-
-                    // Tint button with current color -> Disabled by user request
-                    _colorPickerButton.draw(b, Color.White, 0.99f);
-
-                    if (_colorPickerButton.containsPoint(Game1.getMouseX(), Game1.getMouseY()))
-                    {
-                        IClickableMenu.drawHoverText(b, _colorPickerButton.hoverText, Game1.smallFont);
-                    }
-                }
-
-                // Draw Color Picker Menu
-                if (_activeColorMenu != null)
-                {
-                    _activeColorMenu.draw(b);
-                }
-
-                if (__instance.isWithinBounds(Game1.getMouseX(), Game1.getMouseY()) && !Game1.options.hardwareCursor)
-                {
-                    Game1.mouseCursor = Game1.options.gamepadControls
-                        ? Game1.cursor_gamepad_pointer
-                        : Game1.cursor_default;
-                }
+                DrawChatBoxChrome(__instance, b);
             }
             else
             {
@@ -460,6 +436,49 @@ internal class ChatBoxScrollPatches
     #endregion
 
     #region Helper Methods
+
+    /// <summary>
+    ///     Draws the text input, emoji menu and colour picker. Shared so the chat box still
+    ///     appears when there are no messages to clip and draw.
+    /// </summary>
+    private static void DrawChatBoxChrome(ChatBox chatBox, SpriteBatch b)
+    {
+        // Draw text input and emoji menu
+        chatBox.chatBox.Draw(b, drawShadow: false);
+        chatBox.emojiMenuIcon.draw(b, Color.White, 0.99f);
+
+        if (chatBox.choosingEmoji)
+        {
+            chatBox.emojiMenu.draw(b);
+        }
+
+        // Draw Color Picker Button
+        if (_colorPickerButton != null)
+        {
+            _colorPickerButton.tryHover(Game1.getMouseX(), Game1.getMouseY());
+
+            // Tint button with current color -> Disabled by user request
+            _colorPickerButton.draw(b, Color.White, 0.99f);
+
+            if (_colorPickerButton.containsPoint(Game1.getMouseX(), Game1.getMouseY()))
+            {
+                IClickableMenu.drawHoverText(b, _colorPickerButton.hoverText, Game1.smallFont);
+            }
+        }
+
+        // Draw Color Picker Menu
+        if (_activeColorMenu != null)
+        {
+            _activeColorMenu.draw(b);
+        }
+
+        if (chatBox.isWithinBounds(Game1.getMouseX(), Game1.getMouseY()) && !Game1.options.hardwareCursor)
+        {
+            Game1.mouseCursor = Game1.options.gamepadControls
+                ? Game1.cursor_gamepad_pointer
+                : Game1.cursor_default;
+        }
+    }
 
     private static int CalculateTotalHeight(List<ChatMessage> messages, bool chatSelected)
     {
@@ -631,7 +650,7 @@ internal class ChatBoxScrollPatches
 
         // The game uses MeasureString("(").Y for line height
         float lineHeight = font.MeasureString("(").Y;
-        message.verticalSize = (int)(lineCount * lineHeight) + 2;
+        message.verticalSize = (int)(lineCount * lineHeight) + 12;
     }
 
     #endregion

@@ -702,7 +702,11 @@ internal class ChatTextBoxPatches
             if (!(ModEntry.Instance?.Config.EnableHorizontalScrolling ?? false)) return true;
 
             Texture2D? tex = _textBoxTexture(__instance);
-            Color color = _textColor(__instance);
+
+            // Preview the message in the colour it will actually be sent in. The text box's own
+            // _textColor is always white, so using it hides the player's chosen chat colour.
+            Color textColor = ChatMessage.getColorFromName(Game1.player.defaultChatColor);
+            Color cursorColor = _textColor(__instance);
             bool showCursor = Game1.currentGameTime.TotalGameTime.TotalMilliseconds % 1000.0 >= 500.0;
 
             DrawTextBoxBackground(spriteBatch, __instance, tex);
@@ -732,10 +736,10 @@ internal class ChatTextBoxPatches
             if (s.SelectionStart != s.SelectionEnd)
                 DrawSelectionHighlight(spriteBatch, s, font, __instance);
 
-            DrawTextContent(spriteBatch, msg.message, __instance, s, font, color);
+            DrawTextContent(spriteBatch, msg.message, __instance, s, font, textColor);
 
             if (showCursor && __instance.Selected)
-                DrawCursor(spriteBatch, __instance, cursorPixel, s.ScrollOffset, color);
+                DrawCursor(spriteBatch, __instance, cursorPixel, s.ScrollOffset, cursorColor);
 
             EndClippedRendering(spriteBatch, oldScissor, oldRaster);
             return false;
