@@ -28,3 +28,9 @@ config.json
 dev-docs/
 code-quality-plan.md
 *.secondsave.code-workspace
+
+# JetBrains project metadata: per-developer, no shared configuration
+.idea/
+# Workspace file referencing a local decompiled-source folder
+ChatImprovements.code-workspace
+Stardew Valley.vscode.code-workspace

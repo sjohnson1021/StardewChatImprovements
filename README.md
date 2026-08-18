@@ -8,11 +8,9 @@ Stardew's chat box stops accepting input once your text reaches the edge of the
 box, keeps only a handful of messages, and offers no way to move the cursor,
 select text, or fix a typo in the middle of a sentence. This fixes all of that.
 
-![Cutting, copying and pasting text, and selecting it all with Ctrl+A](docs/images/clipboard.gif)
+![Long messages, scrollback, per-player colours and a clickable link](docs/images/chat-window.png)
 
 ## Features
-
-![Long messages, scrollback, per-player colours and a clickable link](docs/images/chat-window.png)
 
 **Longer messages.** Type up to 1,000 characters (500 by default) instead of
 being cut off at the width of the box. The text scrolls sideways as you type.
@@ -27,12 +25,14 @@ there.
 **Text selection.** Hold <kbd>Shift</kbd> with the arrow keys, click and drag,
 or press <kbd>Ctrl</kbd>+<kbd>A</kbd>.
 
+**Clipboard.** <kbd>Ctrl</kbd>+<kbd>C</kbd>, <kbd>Ctrl</kbd>+<kbd>X</kbd> and
+<kbd>Ctrl</kbd>+<kbd>V</kbd>. Every keybind above is rebindable.
+
+![Cutting, copying and pasting text, and selecting it all with Ctrl+A](docs/images/clipboard.gif)
+
 **Undo and redo.** <kbd>Ctrl</kbd>+<kbd>Z</kbd> and <kbd>Ctrl</kbd>+<kbd>Y</kbd>.
 
 ![Undoing and redoing edits, then selecting text by dragging](docs/images/undo-redo.gif)
-
-**Clipboard.** <kbd>Ctrl</kbd>+<kbd>C</kbd>, <kbd>Ctrl</kbd>+<kbd>X</kbd> and
-<kbd>Ctrl</kbd>+<kbd>V</kbd>. Every keybind above is rebindable.
 
 **Word-wise editing.** <kbd>Ctrl</kbd> with the arrow keys jumps by word;
 <kbd>Ctrl</kbd>+<kbd>Backspace</kbd> and <kbd>Ctrl</kbd>+<kbd>Delete</kbd>
