@@ -9,12 +9,11 @@ namespace ChatImprovements;
 
 public class ColorPickerMenu : IClickableMenu
 {
-    public List<ClickableTextureComponent> Icons = new List<ClickableTextureComponent>();
-    public List<Color> IconColors = new List<Color>();
-    public List<string> ColorNames = new List<string>();
-
+    public List<ClickableTextureComponent> Icons { get; } = new();
+    public List<Color> IconColors { get; } = new();
+    public List<string> ColorNames { get; } = new();
     private int _selected = -1;
-    private Action<string> _onSelection;
+    private readonly Action<string>? _onSelection;
 
     private static readonly string[] AvailableColors =
     {
@@ -23,16 +22,17 @@ public class ColorPickerMenu : IClickableMenu
         "purple", "pink", "plum", "salmon", "aqua", "gray"
     };
 
-    public ColorPickerMenu(ChatBox chatBox, Action<string> onSelection = null)
+    public ColorPickerMenu(ChatBox chatBox, Action<string>? onSelection = null)
     {
         _onSelection = onSelection;
+        Game1.activeClickableMenu = this;
         SetUpIcons(chatBox);
     }
 
     // We need to re-setup if window size changes, but we need reference to chatBox/button position.
     // For simplicity, we just close it on resize or let it be. 
     // But setUpIcons needs position. We'll store chatBox reference.
-    private ChatBox _chatBox;
+    private ChatBox _chatBox = null!; // Initialized in SetUpIcons called by Ctor
 
     public void SetUpIcons(ChatBox chatBox)
     {
@@ -45,10 +45,7 @@ public class ColorPickerMenu : IClickableMenu
         Icons.Clear();
         IconColors.Clear();
         ColorNames.Clear();
-        // Standard slot background or just drawn box?
-        // We will draw cells manually or use a simple box.
-        // Let's use standard slotSource but scaled? No, slot source is 24x24.
-        // We can just draw a colored rect and a border.
+        // Just draw a colored rect and a border.
 
         string currentColor = Game1.player.defaultChatColor ?? "white";
 
@@ -58,11 +55,7 @@ public class ColorPickerMenu : IClickableMenu
             Color c = ChatMessage.getColorFromName(name);
 
             // Bounds will be set later
-            Icons.Add(new ClickableTextureComponent(new Rectangle(0, 0, iconSize, iconSize), null, Rectangle.Empty, 1f)
-            {
-                name = name,
-                hoverText = name
-            });
+            Icons.Add(new ClickableTextureComponent(name, new Rectangle(0, 0, iconSize, iconSize), null, ModEntry.Instance?.Helper.Translation.Get("color." + name) ?? name, null, Rectangle.Empty, 1f));
 
             IconColors.Add(c);
             ColorNames.Add(name);
@@ -129,7 +122,7 @@ public class ColorPickerMenu : IClickableMenu
             Icons[i].bounds.Y = startY + row * (iconSize + iconSpacing);
         }
 
-        initialize(xPositionOnScreen, yPositionOnScreen, width, height, showUpperRightCloseButton: true);
+        initialize(xPositionOnScreen, yPositionOnScreen, width, height, showUpperRightCloseButton: false);
     }
 
     public override void gameWindowSizeChanged(Rectangle oldBounds, Rectangle newBounds)
@@ -140,22 +133,6 @@ public class ColorPickerMenu : IClickableMenu
 
     public override void receiveLeftClick(int x, int y, bool playSound = true)
     {
-        if (upperRightCloseButton != null && upperRightCloseButton.containsPoint(x, y))
-        {
-            if (playSound) Game1.playSound("bigDeSelect");
-            // Close logic handled by owner?
-            // We need a way to close. 
-            // We can invoke selection with null or just expect owner to check isWithinBounds?
-            // Actually, we can just do nothing and let the 'click outside' logic handle it?
-            // Or we should callback.
-            // But we don't have a close callback.
-            // Let's assume standard behavior: clicking close button does nothing unless we handle it?
-            // Actually, clicking close button usually closes.
-            // We will invoke selection with current color to close?
-            // Or force close.
-            _onSelection?.Invoke(null); // Signal close without change?
-            return;
-        }
 
         for (int i = 0; i < Icons.Count; i++)
         {
@@ -168,6 +145,11 @@ public class ColorPickerMenu : IClickableMenu
                 return;
             }
         }
+
+        if (!isWithinBounds(x, y))
+        {
+            _chatBox.receiveLeftClick(Game1.getMouseX(true), Game1.getMouseY(true));
+        }
     }
 
     public override void draw(SpriteBatch b)
@@ -177,8 +159,12 @@ public class ColorPickerMenu : IClickableMenu
         if (upperRightCloseButton != null)
             upperRightCloseButton.draw(b);
 
+        bool hoveringIcon = false;
+        string? hoverText = null;
+
         for (int i = 0; i < Icons.Count; i++)
         {
+            // Just draw a colored rect and a border.
             // Draw background for cell (optional, maybe dark rect?)
             b.Draw(Game1.staminaRect, Icons[i].bounds, new Color(60, 60, 60)); // Dark grey back
 
@@ -191,19 +177,34 @@ public class ColorPickerMenu : IClickableMenu
             {
                 // Draw selection border
                 IClickableMenu.drawTextureBox(b, Game1.mouseCursors, new Rectangle(375, 357, 3, 3),
-                    Icons[i].bounds.X, Icons[i].bounds.Y, Icons[i].bounds.Width, Icons[i].bounds.Height,
-                    Color.White, 4f, false);
+                    Icons[i].bounds.X - 2, Icons[i].bounds.Y - 2, Icons[i].bounds.Width + 2, Icons[i].bounds.Height + 2,
+                    Color.White, 4f, false); // Where to change selection border/color
             }
             else if (Icons[i].containsPoint(Game1.getMouseX(), Game1.getMouseY()))
             {
                 // Hover effect (highlight)
                 b.Draw(Game1.staminaRect, Icons[i].bounds, Color.White * 0.2f);
+                hoveringIcon = true;
+                hoverText = Icons[i].hoverText;
             }
         }
 
-        drawMouse(b);
-    }
+        if (isWithinBounds(Game1.getMouseX(), Game1.getMouseY()))
+        {
+            Game1.mouseCursor = hoveringIcon switch
+            {
+                true => Game1.cursor_gamepad_pointer,
+                _ => Game1.cursor_default
+            };
+        }
 
+        if (hoverText != null)
+        {
+            IClickableMenu.drawHoverText(b, hoverText, Game1.smallFont);
+        }
+
+        drawMouse(b, true, Game1.mouseCursor);
+    }
     public override bool isWithinBounds(int x, int y)
     {
         return x >= xPositionOnScreen && x <= xPositionOnScreen + width &&

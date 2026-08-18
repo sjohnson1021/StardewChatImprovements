@@ -1,81 +1,47 @@
 using System;
 using System.Collections.Generic;
-using System.Diagnostics;
-using System.Runtime.InteropServices;
-using System.Text;
-using System.Text.RegularExpressions;
+using System.Linq;
+using System.Globalization;
 using HarmonyLib;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
 using Microsoft.Xna.Framework.Input;
 using StardewModdingAPI;
-using StardewModdingAPI.Utilities;
 using StardewValley;
 using StardewValley.Menus;
 
 namespace ChatImprovements;
-#pragma warning disable CS8602
+
+/// <summary>
+/// Harmony patches for ChatTextBox that implement enhanced text input features:
+/// - Cursor navigation (arrow keys, Home/End, Ctrl+Arrow for word jumping)
+/// - Text selection with Shift+Arrow keys
+/// - Clipboard operations (Copy/Cut/Paste) with proper OS integration
+/// - Undo/Redo with smart snapshotting
+/// - Horizontal scrolling for long messages
+/// - Emoji boundary snapping
+/// </summary>
 internal class ChatTextBoxPatches
 {
-    #region State Tracking
+    #region Constants
+
+    private const int MaxUndoHistorySize = 500;
+    private const double IdleSnapshotDelay = 1.5;
+    private const int SnapshotCharacterInterval = 10;
+    private const float TextBoxPadding = 16f;
+    private const float TextBoxWidthPadding = 72f;
+
+    #endregion
+
+    #region State Management
 
     private static readonly Dictionary<ChatTextBox, TextBoxState> States = new();
 
-    private class TextBoxState
-    {
-        public int CursorIndex;
-        public string FullText = "";
-        public bool IsDragging, WasMousePressed;
-        public double LastLeftPress, LastRightPress, LastHomePress, LastEndPress;
-        public double LastLeftRepeat, LastRightRepeat, LastHomeRepeat, LastEndRepeat;
-        public double LastUndoPress, LastRedoPress;
-        public double LastUndoRepeat, LastRedoRepeat;
-        public float ScrollOffset;
-        public int SelectionEnd;
-        public int SelectionStart;
-
-        // Undo/Redo Stacks
-        public readonly Stack<HistoryState> UndoStack = new();
-        public readonly Stack<HistoryState> RedoStack = new();
-
-        // Smart snapshot tracking
-        public double LastSnapshotTime;
-        public double LastTypingTime;
-        public int CharsSinceSnapshot;
-        public int LastSnapshotCursor = -1;
-        public OperationType LastOperation = OperationType.None;
-    }
-
-    private enum OperationType
-    {
-        None,
-        Typing,
-        Backspace,
-        Delete,
-        Paste,
-        CursorMove,
-        Emoji
-    }
-
-    private readonly struct HistoryState
-    {
-        public readonly string Text;
-        public readonly int Cursor;
-        public readonly int SelectionStart;
-        public readonly int SelectionEnd;
-
-        public HistoryState(string text, int cursor, int selectionStart, int selectionEnd)
-        {
-            Text = text;
-            Cursor = cursor;
-            SelectionStart = selectionStart;
-            SelectionEnd = selectionEnd;
-        }
-    }
-
     private static TextBoxState GetState(ChatTextBox box)
     {
-        if (States.TryGetValue(box, out TextBoxState? state)) return state;
+        if (States.TryGetValue(box, out TextBoxState? state))
+            return state;
+
         state = new TextBoxState();
         States[box] = state;
         return state;
@@ -85,14 +51,10 @@ internal class ChatTextBoxPatches
 
     #region Smart Snapshot Logic
 
-    /// <summary>
-    /// Intelligently decide whether to take a snapshot based on context.
-    /// </summary>
     private static void MaybeSnapshot(TextBoxState s, OperationType currentOp, bool force = false)
     {
         double now = Game1.currentGameTime.TotalGameTime.TotalSeconds;
-        
-        // Always snapshot if forced (discrete operations like paste, emoji)
+
         if (force)
         {
             TakeSnapshot(s);
@@ -103,18 +65,17 @@ internal class ChatTextBoxPatches
             return;
         }
 
-        // Snapshot on operation type change (typing → backspace, etc.)
+        // Operation changed (e.g. typing -> backspace)
         if (s.LastOperation != OperationType.None && s.LastOperation != currentOp)
         {
             TakeSnapshot(s);
             s.CharsSinceSnapshot = 0;
         }
 
-        // Snapshot on cursor position jump (user moved cursor)
-        if (currentOp == OperationType.Typing && s.LastSnapshotCursor <= -1)
+        // Cursor jumped manually
+        if (currentOp == OperationType.Typing && s.LastSnapshotCursor >= 0)
         {
-            // If cursor jumped (not sequential typing), snapshot before typing at new position
-            if (s.CursorIndex != s.LastSnapshotCursor && 
+            if (s.CursorIndex != s.LastSnapshotCursor &&
                 s.CursorIndex != s.LastSnapshotCursor + s.CharsSinceSnapshot)
             {
                 TakeSnapshot(s);
@@ -122,8 +83,8 @@ internal class ChatTextBoxPatches
             }
         }
 
-        // Snapshot every 10 characters during continuous typing
-        if (currentOp == OperationType.Typing && s.CharsSinceSnapshot >= 10)//SnapshotCharacterInterval
+        // Interval check
+        if (currentOp == OperationType.Typing && s.CharsSinceSnapshot >= SnapshotCharacterInterval)
         {
             TakeSnapshot(s);
             s.CharsSinceSnapshot = 0;
@@ -134,16 +95,12 @@ internal class ChatTextBoxPatches
         s.LastSnapshotCursor = s.CursorIndex;
     }
 
-    /// <summary>
-    /// Check if enough time has passed for an idle snapshot (called from Update).
-    /// </summary>
     private static void CheckIdleSnapshot(TextBoxState s)
     {
         double now = Game1.currentGameTime.TotalGameTime.TotalSeconds;
-        
-        // If typing stopped for 1 second and we have unsaved changes, snapshot
-        if (s.LastOperation != OperationType.None && 
-            now - s.LastSnapshotTime >= 1.5 && //Snapshot Time Interval - Time between snapshots
+
+        if (s.LastOperation != OperationType.None &&
+            now - s.LastSnapshotTime >= IdleSnapshotDelay &&
             s.CharsSinceSnapshot > 0)
         {
             TakeSnapshot(s);
@@ -154,30 +111,28 @@ internal class ChatTextBoxPatches
 
     private static void TakeSnapshot(TextBoxState s)
     {
-        // Don't snapshot if nothing changed
+        // Dedup
         if (s.UndoStack.Count > 0)
         {
-            var last = s.UndoStack.Peek();
-            if (last.Text == s.FullText && 
-                last.Cursor == s.CursorIndex && 
-                last.SelectionStart == s.SelectionStart && 
-                last.SelectionEnd == s.SelectionEnd)
-            {
+            HistoryState last = s.UndoStack.Peek();
+            if (last.Text == s.FullText && last.Cursor == s.CursorIndex &&
+                last.SelectionStart == s.SelectionStart && last.SelectionEnd == s.SelectionEnd)
                 return;
-            }
         }
 
         s.UndoStack.Push(new HistoryState(s.FullText, s.CursorIndex, s.SelectionStart, s.SelectionEnd));
-        
-        // Limit history to 100 states
-        if (s.UndoStack.Count >= 500)
+
+        if (s.UndoStack.Count > MaxUndoHistorySize)
         {
-            var items = new List<HistoryState>(s.UndoStack);
-            items.RemoveAt(items.Count - 1); // Remove oldest
+            // Truncate oldest by rebuilding stack (inefficient but rare)
+            List<HistoryState> items = s.UndoStack.ToList();
+            items.RemoveAt(items.Count - 1);
             s.UndoStack.Clear();
-            items.Reverse(); // Stack stores newest first, so reverse to rebuild
-            foreach (var item in items)
-                s.UndoStack.Push(item);
+            // ToList returns items in Stack order (Newest first), so reversing gives Oldest first.
+            // Push expects items.
+            // Start from bottom: items[Last] is oldest.
+            for (int i = items.Count - 1; i >= 0; i--)
+                s.UndoStack.Push(items[i]);
         }
 
         s.RedoStack.Clear();
@@ -197,112 +152,155 @@ internal class ChatTextBoxPatches
 
     #endregion
 
-    #region Clipboard
+    #region Text Navigation & Editing
 
-    [DllImport("SDL2")]
-    private static extern IntPtr SDL_GetClipboardText();
-
-    [DllImport("SDL2")]
-    private static extern void SDL_free(IntPtr mem);
-
-    [DllImport("SDL2", EntryPoint = "SDL_SetClipboardText")]
-    private static extern int SDL_SetClipboardText_Internal(IntPtr text);
-
-    private static string GetClipboard()
+    /// <summary>
+    /// Calculates cursor position from a mouse click X coordinate.
+    /// </summary>
+    private static int CalculateCursorFromClick(ChatBox chatBox, int x, TextBoxState s)
     {
-        try
-        {
-            if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
-                try
-                {
-                    Process? p = Process.Start(new ProcessStartInfo
-                    {
-                        FileName = "wl-paste",
-                        RedirectStandardOutput = true,
-                        UseShellExecute = false,
-                        CreateNoWindow = true
-                    });
-                    if (p != null)
-                    {
-                        string output = p.StandardOutput.ReadToEnd();
-                        p.WaitForExit();
-                        return output;
-                    }
-                }
-                catch
-                {
-                    /* Fall back to SDL2 */
-                }
+        float clickX = x - chatBox.chatBox.X - TextBoxPadding + s.ScrollOffset;
+        ChatMessage msg = new();
+        msg.parseMessageForEmoji(s.FullText);
+        SpriteFont? font = ChatBox.messageFont(LocalizedContentManager.CurrentLanguageCode);
+        if (font == null) return s.FullText.Length;
 
-            IntPtr ptr = SDL_GetClipboardText();
-            if (ptr == IntPtr.Zero) return "";
-            string text = Marshal.PtrToStringUTF8(ptr) ?? "";
-            SDL_free(ptr);
-            return text;
-        }
-        catch (Exception ex)
-        {
-            ModEntry.Instance?.Monitor.Log($"Clipboard error: {ex.Message}", LogLevel.Error);
-            return "";
-        }
-    }
+        float currentX = 0f;
+        int charCount = 0;
 
-    private static void SetClipboard(string text)
-    {
-        try
+        foreach (ChatSnippet snippet in msg.message)
         {
-            if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
-                try
-                {
-                    Process? p = Process.Start(new ProcessStartInfo
-                    {
-                        FileName = "wl-copy",
-                        RedirectStandardInput = true,
-                        UseShellExecute = false,
-                        CreateNoWindow = true
-                    });
-                    if (p != null)
-                    {
-                        p.StandardInput.Write(text);
-                        p.StandardInput.Close();
-                        p.WaitForExit();
-                        return;
-                    }
-                }
-                catch
-                {
-                    /* Fall back to SDL2 */
-                }
-
-            byte[] utf8 = Encoding.UTF8.GetBytes(text + "\0");
-            GCHandle handle = GCHandle.Alloc(utf8, GCHandleType.Pinned);
-            try
+            if (snippet.emojiIndex != -1)
             {
-                SDL_SetClipboardText_Internal(handle.AddrOfPinnedObject());
+                // Emoji (approx width check)
+                if (currentX + snippet.myLength / 2 > clickX)
+                    return EmojiHelper.SnapToBoundary(s.FullText, charCount, 0);
+
+                currentX += snippet.myLength;
+                charCount += snippet.emojiIndex.ToString(CultureInfo.InvariantCulture).Length + 2; // [123]
             }
-            finally
+            else if (snippet.message != null)
             {
-                handle.Free();
+                // Text
+                if (currentX + snippet.myLength <= clickX)
+                {
+                    currentX += snippet.myLength;
+                    charCount += snippet.message.Length;
+                }
+                else
+                {
+                    // Click inside text snippet - use binary search to reduce MeasureString calls
+                    float target = clickX - currentX;
+                    int idx = FindClosestCharIndex(snippet.message, target, font);
+                    return EmojiHelper.SnapToBoundary(s.FullText, charCount + idx, 0);
+                }
             }
         }
-        catch (Exception ex)
-        {
-            ModEntry.Instance?.Monitor.Log($"Clipboard error: {ex.Message}", LogLevel.Error);
-        }
+
+        return s.FullText.Length;
     }
 
-    #endregion
+    private static int FindClosestCharIndex(string text, float targetWidth, SpriteFont font)
+    {
+        // Binary search for smallest i where width(text[..i]) >= targetWidth
+        int lo = 0, hi = text.Length;
+        while (lo < hi)
+        {
+            int mid = (lo + hi) >> 1;
+            float w = mid == 0 ? 0f : font.MeasureString(text.Substring(0, mid)).X;
+            if (w < targetWidth) lo = mid + 1; else hi = mid;
+        }
+        int i = Math.Clamp(lo, 0, text.Length);
+        // Choose closer between i and i-1
+        float wi = i == 0 ? 0f : font.MeasureString(text.Substring(0, i)).X;
+        float wim1 = i <= 1 ? 0f : font.MeasureString(text.Substring(0, i - 1)).X;
+        return (wi - targetWidth) <= (targetWidth - wim1) ? i : i - 1;
+    }
 
-    #region Text Navigation
+    private static void InsertText(ChatTextBox box, string text)
+    {
+        TextBoxState s = GetState(box);
+        MaybeSnapshot(s, OperationType.Typing);
+
+        // Pre-snap insertion point to avoid inserting inside finalized emoji tokens
+        int snappedBefore = EmojiHelper.SnapToBoundary(s.FullText, s.CursorIndex, 1);
+        if (snappedBefore != s.CursorIndex)
+        {
+            s.CursorIndex = snappedBefore;
+            s.SelectionStart = s.SelectionEnd = s.CursorIndex;
+        }
+
+        // Delete selection
+        if (s.SelectionStart != s.SelectionEnd)
+        {
+            int start = Math.Min(s.SelectionStart, s.SelectionEnd);
+            int length = Math.Abs(s.SelectionEnd - s.SelectionStart);
+            s.FullText = s.FullText.Remove(start, length);
+            s.CursorIndex = start;
+            s.SelectionStart = s.SelectionEnd = 0;
+        }
+
+        if (s.FullText.Length + text.Length > (ModEntry.Instance?.Config.MaxMessageLength ?? 100))
+            return;
+
+        // Clamp cursor to valid bounds to prevent AOOR during insert
+        s.CursorIndex = Math.Clamp(s.CursorIndex, 0, s.FullText.Length);
+        s.FullText = s.FullText.Insert(s.CursorIndex, text);
+        s.CursorIndex += text.Length;
+        // Post-snap to ensure cursor is not left inside an emoji token after edits (e.g., inserting '[' before a closing "]")
+        s.CursorIndex = EmojiHelper.SnapToBoundary(s.FullText, s.CursorIndex, 1);
+        s.SelectionStart = s.SelectionEnd = s.CursorIndex;
+        s.CharsSinceSnapshot += text.Length;
+        s.LastTypingTime = Game1.currentGameTime.TotalGameTime.TotalSeconds;
+
+        RebuildText(box, s);
+    }
+
+    private static void DeleteSelection(ChatTextBox box)
+    {
+        TextBoxState s = GetState(box);
+        if (s.SelectionStart == s.SelectionEnd) return;
+
+        MaybeSnapshot(s, OperationType.Delete, true);
+
+        int start = Math.Min(s.SelectionStart, s.SelectionEnd);
+        int length = Math.Abs(s.SelectionEnd - s.SelectionStart);
+
+        s.FullText = s.FullText.Remove(start, length);
+        s.CursorIndex = s.SelectionStart = s.SelectionEnd = start;
+        RebuildText(box, s);
+    }
+
+    private static void RebuildText(ChatTextBox box, TextBoxState s)
+    {
+        box.finalText.Clear();
+        box.finalText.Add(new ChatSnippet(s.FullText, LocalizedContentManager.CurrentLanguageCode));
+        box.updateWidth();
+    }
+
+    private static void UpdateSelection(TextBoxState s, int newCursor, bool shift)
+    {
+        if (shift)
+        {
+            if (s.SelectionStart == s.SelectionEnd)
+                s.SelectionStart = s.CursorIndex;
+            s.SelectionEnd = newCursor;
+        }
+        else
+        {
+            s.SelectionStart = s.SelectionEnd = newCursor;
+        }
+        s.CursorIndex = newCursor;
+    }
+
+    #region Word Navigation Helpers
 
     private static int GetNextSegmentEnd(string text, int pos)
     {
         if (pos >= text.Length) return pos;
-        char c = text[pos];
-
-        if (char.IsWhiteSpace(c))
+        if (char.IsWhiteSpace(text[pos]))
             return AdvanceWhile(text, pos, char.IsWhiteSpace);
-        return char.IsLetterOrDigit(c)
+        return char.IsLetterOrDigit(text[pos])
             ? AdvanceWhile(text, pos, char.IsLetterOrDigit)
             : AdvanceWhile(text, pos, ch => !char.IsWhiteSpace(ch) && !char.IsLetterOrDigit(ch));
     }
@@ -310,11 +308,9 @@ internal class ChatTextBoxPatches
     private static int GetPrevSegmentStart(string text, int pos)
     {
         if (pos <= 0) return 0;
-        char c = text[pos - 1];
-
-        if (char.IsWhiteSpace(c))
+        if (char.IsWhiteSpace(text[pos - 1]))
             return RetreatWhile(text, pos - 1, char.IsWhiteSpace);
-        return char.IsLetterOrDigit(c)
+        return char.IsLetterOrDigit(text[pos - 1])
             ? RetreatWhile(text, pos - 1, char.IsLetterOrDigit)
             : RetreatWhile(text, pos - 1, ch => !char.IsWhiteSpace(ch) && !char.IsLetterOrDigit(ch));
     }
@@ -333,125 +329,17 @@ internal class ChatTextBoxPatches
 
     #endregion
 
-    #region Emoji Handling
-
-    private static int SnapCursorToEmojiBoundary(string text, int cursor, int direction)
-    {
-        if (string.IsNullOrEmpty(text) || cursor < 0 || cursor > text.Length) return cursor;
-
-        Regex emojiRegex = new(@"\[\d{2,3}\]");
-
-        foreach (Match match in emojiRegex.Matches(text))
-        {
-            int start = match.Index;
-            int end = match.Index + match.Length;
-
-            if (cursor > start && cursor < end)
-                return direction < 0 ? start :
-                    direction > 0 ? end :
-                    cursor - start < end - cursor ? start : end;
-        }
-
-        return cursor;
-    }
-
-    private static (int start, int end) GetEmojiToDelete(string text, int pos, bool isBackspace)
-    {
-        if (string.IsNullOrEmpty(text) || pos < 0 || pos > text.Length) return (-1, -1);
-
-        Regex emojiRegex = new(@"\[\d{2,3}\]");
-
-        foreach (Match match in emojiRegex.Matches(text))
-        {
-            int start = match.Index;
-            int end = match.Index + match.Length;
-
-            if ((isBackspace && pos > start && pos <= end) ||
-                (!isBackspace && pos >= start && pos < end))
-                return (start, end);
-        }
-
-        return (-1, -1);
-    }
-
     #endregion
 
-    #region Text Operations
-
-    private static void InsertText(ChatTextBox box, string text)
-    {
-        TextBoxState s = GetState(box);
-        
-        // Smart snapshot before inserting
-        MaybeSnapshot(s, OperationType.Typing);
-
-        // Replace selection if exists
-        if (s.SelectionStart != s.SelectionEnd)
-        {
-            int start = Math.Min(s.SelectionStart, s.SelectionEnd);
-            int length = Math.Abs(s.SelectionEnd - s.SelectionStart);
-            s.FullText = s.FullText.Remove(start, length);
-            s.CursorIndex = start;
-        }
-
-        if (s.FullText.Length + text.Length > ModEntry.Instance.Config.MaxMessageLength)
-            return;
-
-        s.FullText = s.FullText.Insert(s.CursorIndex, text);
-        s.CursorIndex += text.Length;
-        s.SelectionStart = s.SelectionEnd = s.CursorIndex;
-        s.CharsSinceSnapshot += text.Length;
-        s.LastTypingTime = Game1.currentGameTime.TotalGameTime.TotalSeconds;
-        
-        RebuildText(box, s);
-    }
-
-    private static void DeleteSelection(ChatTextBox box)
-    {
-        TextBoxState s = GetState(box);
-        if (s.SelectionStart == s.SelectionEnd) return;
-        
-        // Always snapshot before deleting selection (discrete operation)
-        MaybeSnapshot(s, OperationType.Delete, force: true);
-
-        int start = Math.Min(s.SelectionStart, s.SelectionEnd);
-        int length = Math.Abs(s.SelectionEnd - s.SelectionStart);
-        s.FullText = s.FullText.Remove(start, length);
-        s.CursorIndex = s.SelectionStart = s.SelectionEnd = start;
-        
-        RebuildText(box, s);
-    }
-
-    private static void RebuildText(ChatTextBox box, TextBoxState s)
-    {
-        box.finalText.Clear();
-        box.finalText.Add(new ChatSnippet(s.FullText, LocalizedContentManager.CurrentLanguageCode));
-        box.updateWidth();
-    }
-
-    private static void UpdateSelection(TextBoxState s, int newCursor, bool shift)
-    {
-        s.SelectionStart = shift switch
-        {
-            true when s.SelectionStart == s.SelectionEnd => s.CursorIndex,
-            false => newCursor,
-            _ => s.SelectionStart
-        };
-
-        s.SelectionEnd = s.CursorIndex = newCursor;
-    }
-
-    #endregion
-
-    #region Patches
+    #region Harmony Patches
 
     [HarmonyPatch(typeof(ChatTextBox), "RecieveTextInput", typeof(string))]
-    public class RecieveTextInputStringPatch
+    public class ReceiveTextInputStringPatch
     {
         private static bool Prefix(ChatTextBox __instance, string text)
         {
-            if (!__instance.Selected) 
-            return true;
+            if (!__instance.Selected) return true;
+
             InsertText(__instance, text);
             return false;
         }
@@ -462,25 +350,28 @@ internal class ChatTextBoxPatches
     {
         private static bool Prefix(ChatTextBox __instance, int emoji)
         {
-            if (!ModEntry.Instance.Config.EnableHorizontalScrolling) return true;
+            if (!(ModEntry.Instance?.Config.EnableHorizontalScrolling ?? false)) return true;
 
-            TextBoxState s = GetState(__instance);
-            if (s.FullText.Length + 10 > ModEntry.Instance.Config.MaxMessageLength) return false;
+            TextBoxState s = GetState(__instance); // Fixed: was __instance which is ChatTextBox
 
-            // Emoji is a discrete operation - force snapshot
-            MaybeSnapshot(s, OperationType.Emoji, force: true);
-            
+            // Emoji codes ~10 chars
+            if (s.FullText.Length + 10 > (ModEntry.Instance?.Config.MaxMessageLength ?? 100))
+                return false;
+
+            MaybeSnapshot(s, OperationType.Emoji, true);
+
             __instance.finalText.Add(new ChatSnippet(emoji));
             __instance.updateWidth();
 
             s.FullText = ChatMessage.makeMessagePlaintext(__instance.finalText, false);
             s.CursorIndex = s.SelectionStart = s.SelectionEnd = s.FullText.Length;
+
             return false;
         }
     }
 
     [HarmonyPatch(typeof(ChatTextBox), "RecieveCommandInput", typeof(char))]
-    public class RecieveCommandInputPatch
+    public class ReceiveCommandInputPatch
     {
         private static bool Prefix(ChatTextBox __instance, char command)
         {
@@ -494,16 +385,16 @@ internal class ChatTextBoxPatches
             if (s.SelectionStart != s.SelectionEnd)
             {
                 DeleteSelection(__instance);
+                return false;
             }
-            else if (s.CursorIndex > 0)
+
+            if (s.CursorIndex > 0)
             {
-                // Smart snapshot for backspace
                 MaybeSnapshot(s, OperationType.Backspace);
-                
+
                 if (ctrl)
                 {
-                    (int start, int end) emoji = GetEmojiToDelete(s.FullText, s.CursorIndex, true);
-
+                    var emoji = EmojiHelper.GetEmojiRange(s.FullText, s.CursorIndex, true);
                     if (emoji.start != -1)
                     {
                         s.FullText = s.FullText.Remove(emoji.start, emoji.end - emoji.start);
@@ -518,7 +409,7 @@ internal class ChatTextBoxPatches
                 }
                 else
                 {
-                    (int start, int end) emoji = GetEmojiToDelete(s.FullText, s.CursorIndex, true);
+                    var emoji = EmojiHelper.GetEmojiRange(s.FullText, s.CursorIndex, true);
                     if (emoji.start != -1)
                     {
                         s.FullText = s.FullText.Remove(emoji.start, emoji.end - emoji.start);
@@ -530,11 +421,9 @@ internal class ChatTextBoxPatches
                         s.SelectionStart = s.SelectionEnd = s.CursorIndex;
                     }
                 }
-
                 s.CharsSinceSnapshot++;
                 RebuildText(__instance, s);
             }
-
             return false;
         }
     }
@@ -564,6 +453,7 @@ internal class ChatTextBoxPatches
             }
 
             __instance.chatBox.Update();
+
             if (__instance.choosingEmoji)
             {
                 __instance.choosingEmoji = false;
@@ -575,80 +465,27 @@ internal class ChatTextBoxPatches
 
             if (!__instance.chatBox.Selected || !__instance.isWithinBounds(x, y) ||
                 __instance.emojiMenuIcon.containsPoint(x, y) ||
-                (__instance.choosingEmoji && __instance.emojiMenu.isWithinBounds(x, y))) return false;
+                (__instance.choosingEmoji && __instance.emojiMenu.isWithinBounds(x, y)))
             {
-                TextBoxState s = GetState(__instance.chatBox);
-
-                if (s.IsDragging) return false;
-                int newCursor = CalculateCursorFromClick(__instance, x, s);
-
-                bool shift = Game1.input.GetKeyboardState().IsKeyDown(Keys.LeftShift) ||
-                             Game1.input.GetKeyboardState().IsKeyDown(Keys.RightShift);
-
-                if (!shift)
-                {
-                    s.CursorIndex = newCursor;
-                    s.SelectionStart = newCursor;
-                    s.IsDragging = true;
-                }
-
-                s.SelectionEnd = newCursor;
+                return false;
             }
+
+            TextBoxState state = GetState(__instance.chatBox);
+            if (state.IsDragging) return false;
+
+            int newCursor = CalculateCursorFromClick(__instance, x, state);
+            bool shift = Game1.input.GetKeyboardState().IsKeyDown(Keys.LeftShift) ||
+                         Game1.input.GetKeyboardState().IsKeyDown(Keys.RightShift);
+
+            if (!shift)
+            {
+                state.CursorIndex = newCursor;
+                state.SelectionStart = newCursor;
+                state.IsDragging = true;
+            }
+            state.SelectionEnd = newCursor;
+
             return false;
-        }
-
-        private static int CalculateCursorFromClick(ChatBox chatBox, int x, TextBoxState s)
-        {
-            float clickX = x - chatBox.chatBox.X - 16 + s.ScrollOffset;
-
-            ChatMessage msg = new();
-            msg.parseMessageForEmoji(s.FullText);
-
-            float curX = 0;
-            int charCount = 0, newCursor = 0;
-            SpriteFont? font = ChatBox.messageFont(LocalizedContentManager.CurrentLanguageCode);
-
-            foreach (ChatSnippet? snippet in msg.message)
-                if (snippet.emojiIndex != -1)
-                {
-                    if (curX + snippet.myLength / 2 > clickX)
-                    {
-                        newCursor = charCount;
-                        break;
-                    }
-
-                    curX += snippet.myLength;
-                    charCount += snippet.emojiIndex.ToString().Length + 2;
-                    newCursor = charCount;
-                }
-                else if (snippet.message != null)
-                {
-                    if (curX + snippet.myLength <= clickX)
-                    {
-                        curX += snippet.myLength;
-                        charCount += snippet.message.Length;
-                        newCursor = charCount;
-                    }
-                    else
-                    {
-                        for (int i = 0; i < snippet.message.Length; i++)
-                        {
-                            float charEndX = curX + font.MeasureString(snippet.message[..(i + 1)]).X;
-                            float charStartX = i > 0 ? curX + font.MeasureString(snippet.message[..i]).X : curX;
-                            float charMidX = (charStartX + charEndX) / 2;
-
-                            if (!(clickX < charMidX)) continue;
-                            newCursor = charCount + i;
-                            goto Found;
-                        }
-
-                        newCursor = charCount + snippet.message.Length;
-                        goto Found;
-                    }
-                }
-
-            Found:
-            return SnapCursorToEmojiBoundary(s.FullText, newCursor, 0);
         }
     }
 
@@ -657,7 +494,7 @@ internal class ChatTextBoxPatches
     {
         private static bool Prefix(ChatBox __instance, Keys key)
         {
-            if (!__instance.chatBox.Selected || !ModEntry.Instance.Config.EnableCursorControl)
+            if (!__instance.chatBox.Selected || !(ModEntry.Instance?.Config.EnableCursorControl ?? false))
                 return true;
 
             TextBoxState s = GetState(__instance.chatBox);
@@ -665,9 +502,8 @@ internal class ChatTextBoxPatches
                          Game1.input.GetKeyboardState().IsKeyDown(Keys.RightShift);
             bool ctrl = Game1.input.GetKeyboardState().IsKeyDown(Keys.LeftControl) ||
                         Game1.input.GetKeyboardState().IsKeyDown(Keys.RightControl);
-            double time = Game1.currentGameTime.TotalGameTime.TotalSeconds;
 
-            // Handle Keybinds
+            // Undo
             if (ModEntry.Instance.Config.UndoKeybind.JustPressed())
             {
                 if (s.UndoStack.TryPop(out HistoryState undoState))
@@ -675,10 +511,10 @@ internal class ChatTextBoxPatches
                     s.RedoStack.Push(new HistoryState(s.FullText, s.CursorIndex, s.SelectionStart, s.SelectionEnd));
                     RestoreState(__instance.chatBox, s, undoState);
                 }
-
                 return false;
             }
 
+            // Redo
             if (ModEntry.Instance.Config.RedoKeybind.JustPressed())
             {
                 if (s.RedoStack.TryPop(out HistoryState redoState))
@@ -686,43 +522,45 @@ internal class ChatTextBoxPatches
                     s.UndoStack.Push(new HistoryState(s.FullText, s.CursorIndex, s.SelectionStart, s.SelectionEnd));
                     RestoreState(__instance.chatBox, s, redoState);
                 }
-
                 return false;
             }
 
+            // Copy
             if (ModEntry.Instance.Config.CopyKeybind.JustPressed())
             {
                 if (s.SelectionStart != s.SelectionEnd)
                 {
-                    SetClipboard(s.FullText.Substring(
+                    ClipboardHelper.SetText(s.FullText.Substring(
                         Math.Min(s.SelectionStart, s.SelectionEnd),
                         Math.Abs(s.SelectionEnd - s.SelectionStart)));
                 }
-
                 return false;
             }
 
+            // Cut
             if (ModEntry.Instance.Config.CutKeybind.JustPressed())
             {
                 if (s.SelectionStart != s.SelectionEnd)
                 {
-                    SetClipboard(s.FullText.Substring(
+                    ClipboardHelper.SetText(s.FullText.Substring(
                         Math.Min(s.SelectionStart, s.SelectionEnd),
                         Math.Abs(s.SelectionEnd - s.SelectionStart)));
                     DeleteSelection(__instance.chatBox);
                 }
-
                 return false;
             }
 
+            // Paste
             if (ModEntry.Instance.Config.PasteKeybind.JustPressed())
             {
-                // Paste is a discrete operation
-                MaybeSnapshot(s, OperationType.Paste, force: true);
-                InsertText(__instance.chatBox, GetClipboard());
-                return false;
+                MaybeSnapshot(s, OperationType.Paste, true);
+            string paste = ClipboardHelper.GetText()?.TrimEnd('\r', '\n') ?? "";
+            if (!string.IsNullOrEmpty(paste)) //Need to test this on windows to see if our 'ghost-pasting' is present (paste being handled by something else)
+                InsertText(__instance.chatBox, paste);
+            return false;
             }
 
+            // Select All
             if (ModEntry.Instance.Config.SelectAllKeybind.JustPressed())
             {
                 s.SelectionStart = 0;
@@ -730,48 +568,43 @@ internal class ChatTextBoxPatches
                 return false;
             }
 
-            // Handle cursor movement
-            int newCursor = s.CursorIndex;
+            // Navigation
             bool handled = false;
+            int newCursor = s.CursorIndex;
 
             switch (key)
             {
                 case Keys.Left:
-                    // Mark cursor movement
-                    if (s.LastOperation == OperationType.Typing)
-                        s.LastOperation = OperationType.CursorMove;
-                    
-                    newCursor = ctrl ? GetPrevSegmentStart(s.FullText, s.CursorIndex) :
-                        s.CursorIndex > 0 ? s.CursorIndex - 1 : s.CursorIndex;
-                    newCursor = SnapCursorToEmojiBoundary(s.FullText, newCursor, -1);
-                    s.LastLeftPress = time;
+                    newCursor = ctrl ? GetPrevSegmentStart(s.FullText, s.CursorIndex) : Math.Max(0, s.CursorIndex - 1);
+                    // If we would land inside an emoji, snap to the start so we never end up between brackets
+                    int snappedLeft = EmojiHelper.SnapToBoundary(s.FullText, newCursor, -1);
+                    if (snappedLeft != newCursor)
+                        newCursor = snappedLeft;
                     handled = true;
+                    if (s.LastOperation == OperationType.Typing) s.LastOperation = OperationType.CursorMove;
+                    s.LastLeftPress = Game1.currentGameTime.TotalGameTime.TotalSeconds;
                     break;
                 case Keys.Right:
-                    if (s.LastOperation == OperationType.Typing)
-                        s.LastOperation = OperationType.CursorMove;
-                    
-                    newCursor = ctrl ? GetNextSegmentEnd(s.FullText, s.CursorIndex) :
-                        s.CursorIndex < s.FullText.Length ? s.CursorIndex + 1 : s.CursorIndex;
-                    newCursor = SnapCursorToEmojiBoundary(s.FullText, newCursor, 1);
-                    s.LastRightPress = time;
+                    newCursor = ctrl ? GetNextSegmentEnd(s.FullText, s.CursorIndex) : Math.Min(s.FullText.Length, s.CursorIndex + 1);
+                    // If we would land inside an emoji, snap to the end so we never end up between brackets
+                    int snappedRight = EmojiHelper.SnapToBoundary(s.FullText, newCursor, 1);
+                    if (snappedRight != newCursor)
+                        newCursor = snappedRight;
                     handled = true;
+                    if (s.LastOperation == OperationType.Typing) s.LastOperation = OperationType.CursorMove;
+                    s.LastRightPress = Game1.currentGameTime.TotalGameTime.TotalSeconds;
                     break;
                 case Keys.Home:
-                    if (s.LastOperation == OperationType.Typing)
-                        s.LastOperation = OperationType.CursorMove;
-                    
                     newCursor = 0;
-                    s.LastHomePress = time;
                     handled = true;
+                    if (s.LastOperation == OperationType.Typing) s.LastOperation = OperationType.CursorMove;
+                    s.LastHomePress = Game1.currentGameTime.TotalGameTime.TotalSeconds;
                     break;
                 case Keys.End:
-                    if (s.LastOperation == OperationType.Typing)
-                        s.LastOperation = OperationType.CursorMove;
-                    
                     newCursor = s.FullText.Length;
-                    s.LastEndPress = time;
                     handled = true;
+                    if (s.LastOperation == OperationType.Typing) s.LastOperation = OperationType.CursorMove;
+                    s.LastEndPress = Game1.currentGameTime.TotalGameTime.TotalSeconds;
                     break;
                 case Keys.Delete:
                     s.ScrollOffset = 0;
@@ -782,33 +615,48 @@ internal class ChatTextBoxPatches
                     else if (s.CursorIndex < s.FullText.Length)
                     {
                         MaybeSnapshot(s, OperationType.Delete);
-                        
                         if (ctrl)
                         {
-                            (int start, int end) emoji = GetEmojiToDelete(s.FullText, s.CursorIndex, false);
-                            int segEnd = GetNextSegmentEnd(s.FullText, s.CursorIndex);
-                            s.FullText = emoji.start != -1
-                                ? s.FullText.Remove(emoji.start, emoji.end - emoji.start)
-                                : s.FullText.Remove(s.CursorIndex, segEnd - s.CursorIndex);
+                            var emoji = EmojiHelper.GetEmojiRange(s.FullText, s.CursorIndex, false);
+                            if (emoji.start != -1)
+                            {
+                                s.FullText = s.FullText.Remove(emoji.start, emoji.end - emoji.start);
+                                s.CursorIndex = s.SelectionStart = s.SelectionEnd = Math.Clamp(emoji.start, 0, s.FullText.Length);
+                            }
+                            else
+                            {
+                                int segEnd = GetNextSegmentEnd(s.FullText, s.CursorIndex);
+                                s.FullText = s.FullText.Remove(s.CursorIndex, segEnd - s.CursorIndex);
+                                s.CursorIndex = s.SelectionStart = s.SelectionEnd = Math.Clamp(s.CursorIndex, 0, s.FullText.Length);
+                            }
                         }
                         else
                         {
-                            (int start, int end) emoji = GetEmojiToDelete(s.FullText, s.CursorIndex, false);
-                            s.FullText = emoji.start != -1
-                                ? s.FullText.Remove(emoji.start, emoji.end - emoji.start)
-                                : s.FullText.Remove(s.CursorIndex, 1);
+                            var emoji = EmojiHelper.GetEmojiRange(s.FullText, s.CursorIndex, false);
+                            if (emoji.start != -1)
+                            {
+                                s.FullText = s.FullText.Remove(emoji.start, emoji.end - emoji.start);
+                                s.CursorIndex = s.SelectionStart = s.SelectionEnd = Math.Clamp(emoji.start, 0, s.FullText.Length);
+                            }
+                            else
+                            {
+                                s.FullText = s.FullText.Remove(s.CursorIndex, 1);
+                                s.CursorIndex = s.SelectionStart = s.SelectionEnd = Math.Clamp(s.CursorIndex, 0, s.FullText.Length);
+                            }
                         }
-
                         s.CharsSinceSnapshot++;
                         RebuildText(__instance.chatBox, s);
                     }
-
                     return false;
             }
 
-            if (!handled) return true;
-            UpdateSelection(s, newCursor, shift);
-            return false;
+            if (handled)
+            {
+                UpdateSelection(s, newCursor, shift);
+                return false;
+            }
+
+            return true;
         }
     }
 
@@ -820,27 +668,21 @@ internal class ChatTextBoxPatches
             if (sender is not ChatTextBox box) return true;
             TextBoxState s = GetState(box);
 
-            if (s.FullText.Length <= ModEntry.Instance.Config.MaxMessageLength) return true;
-            var t = ModEntry.Instance?.Helper.Translation;
-            __instance.addErrorMessage(
-                string.Format(t?.Get("hud.messageTooLong") ?? "Message too long! Maximum {0} characters.",
-                    ModEntry.Instance?.Config.MaxMessageLength ?? 0));
-            return false;
+            if (s.FullText.Length > (ModEntry.Instance?.Config.MaxMessageLength ?? 100))
+            {
+                var t = ModEntry.Instance?.Helper.Translation;
+                __instance.addErrorMessage(
+                    string.Format(CultureInfo.CurrentCulture, t?.Get("hud.messageTooLong") ?? "Message too long!",
+                        ModEntry.Instance?.Config.MaxMessageLength ?? 0));
+                return false;
+            }
+            return true;
         }
 
         private static void Postfix(TextBox sender)
         {
             if (sender is not ChatTextBox box) return;
-            TextBoxState s = GetState(box);
-
-            s.FullText = "";
-            s.CursorIndex = s.SelectionStart = s.SelectionEnd = 0;
-            s.ScrollOffset = 0;
-            s.UndoStack.Clear();
-            s.RedoStack.Clear();
-            s.CharsSinceSnapshot = 0;
-            s.LastOperation = OperationType.None;
-
+            GetState(box).Reset();
             box.finalText.Clear();
             box.finalText.Add(new ChatSnippet("", LocalizedContentManager.CurrentLanguageCode));
             box.updateWidth();
@@ -852,243 +694,227 @@ internal class ChatTextBoxPatches
     {
         private static readonly AccessTools.FieldRef<ChatTextBox, Texture2D> _textBoxTexture =
             AccessTools.FieldRefAccess<ChatTextBox, Texture2D>("_textBoxTexture");
-
         private static readonly AccessTools.FieldRef<ChatTextBox, Color> _textColor =
             AccessTools.FieldRefAccess<ChatTextBox, Color>("_textColor");
 
-        private static bool Prefix(ChatTextBox __instance, SpriteBatch spriteBatch, bool drawShadow)
+        private static bool Prefix(ChatTextBox __instance, SpriteBatch spriteBatch)
         {
-            if (!ModEntry.Instance.Config.EnableHorizontalScrolling) return true;
+            if (!(ModEntry.Instance?.Config.EnableHorizontalScrolling ?? false)) return true;
 
             Texture2D? tex = _textBoxTexture(__instance);
             Color color = _textColor(__instance);
             bool showCursor = Game1.currentGameTime.TotalGameTime.TotalMilliseconds % 1000.0 >= 500.0;
 
-            // Draw background
-            if (tex != null)
-            {
-                spriteBatch.Draw(tex, new Rectangle(__instance.X, __instance.Y, 16, __instance.Height),
-                    new Rectangle(0, 0, 16, __instance.Height), Color.White);
-                spriteBatch.Draw(tex,
-                    new Rectangle(__instance.X + 16, __instance.Y, __instance.Width - 32, __instance.Height),
-                    new Rectangle(16, 0, 4, __instance.Height), Color.White);
-                spriteBatch.Draw(tex,
-                    new Rectangle(__instance.X + __instance.Width - 16, __instance.Y, 16, __instance.Height),
-                    new Rectangle(tex.Bounds.Width - 16, 0, 16, __instance.Height), Color.White);
-            }
-            else
-            {
-                Game1.drawDialogueBox(__instance.X - 32, __instance.Y - 112 + 10, __instance.Width + 80,
-                    __instance.Height, false, true);
-            }
+            DrawTextBoxBackground(spriteBatch, __instance, tex);
 
             TextBoxState s = GetState(__instance);
-            SpriteFont? font = ChatBox.messageFont(LocalizedContentManager.CurrentLanguageCode);
-            float maxWidth = __instance.Width - 72f;
+            var lang = LocalizedContentManager.CurrentLanguageCode;
+            SpriteFont? font = ChatBox.messageFont(lang);
+            if (font == null)
+            {
+                return true;
+            }
+
+            float visibleWidth = __instance.Width - TextBoxWidthPadding;
 
             ChatMessage msg = new();
             msg.parseMessageForEmoji(s.FullText);
-            msg.color = ChatMessage.getColorFromName(Game1.player.defaultChatColor);
-            msg.language = LocalizedContentManager.CurrentLanguageCode;
 
-            float totalWidth = msg.message.Sum(snippet => snippet.myLength);
+            float cursorPixel = CalculateCursorPixelPosition(msg.message, s.CursorIndex, font);
+            float totalWidth = 0f;
+            foreach (var sn in msg.message)
+                totalWidth += sn.myLength;
 
-            if (font is null)
-                return true;
+            UpdateScrollOffset(s, cursorPixel, visibleWidth, totalWidth);
 
-            // Calculate cursor position
-            float cursorPixel = 0f;
-            if (s.CursorIndex > 0)
+            var (oldScissor, oldRaster) = BeginClippedRendering(spriteBatch, __instance);
+
+            if (s.SelectionStart != s.SelectionEnd)
+                DrawSelectionHighlight(spriteBatch, s, font, __instance);
+
+            DrawTextContent(spriteBatch, msg.message, __instance, s, font, color);
+
+            if (showCursor && __instance.Selected)
+                DrawCursor(spriteBatch, __instance, cursorPixel, s.ScrollOffset, color);
+
+            EndClippedRendering(spriteBatch, oldScissor, oldRaster);
+            return false;
+        }
+
+        private static void DrawTextBoxBackground(SpriteBatch b, ChatTextBox box, Texture2D? tex)
+        {
+            if (tex != null)
             {
-                int charCount = 0;
-                foreach (ChatSnippet? snippet in msg.message)
-                    if (snippet.emojiIndex != -1)
-                    {
-                        int emojiChars = snippet.emojiIndex.ToString().Length + 2;
-                        if (charCount + emojiChars <= s.CursorIndex)
-                        {
-                            cursorPixel += snippet.myLength;
-                            charCount += emojiChars;
-                        }
-                        else if (charCount < s.CursorIndex)
-                        {
-                            cursorPixel += snippet.myLength;
-                            break;
-                        }
-                        else
-                        {
-                            break;
-                        }
-                    }
-                    else if (snippet.message != null)
-                    {
-                        int len = snippet.message.Length;
-                        if (charCount + len <= s.CursorIndex)
-                        {
-                            cursorPixel += snippet.myLength;
-                            charCount += len;
-                        }
-                        else if (charCount < s.CursorIndex)
-                        {
-                            cursorPixel += font.MeasureString(snippet.message[..(s.CursorIndex - charCount)]).X;
-                            break;
-                        }
-                        else
-                        {
-                            break;
-                        }
-                    }
+                b.Draw(tex, new Rectangle(box.X, box.Y, 16, box.Height), new Rectangle(0, 0, 16, box.Height), Color.White);
+                b.Draw(tex, new Rectangle(box.X + 16, box.Y, box.Width - 32, box.Height), new Rectangle(16, 0, 4, box.Height), Color.White);
+                b.Draw(tex, new Rectangle(box.X + box.Width - 16, box.Y, 16, box.Height), new Rectangle(tex.Bounds.Width - 16, 0, 16, box.Height), Color.White);
             }
+            else
+            {
+                Game1.drawDialogueBox(box.X - 32, box.Y - 112 + 10, box.Width + 80, box.Height, false, true);
+            }
+        }
 
-            // Update scroll
+        private static float CalculateCursorPixelPosition(List<ChatSnippet> snippets, int cursorIndex, SpriteFont font)
+        {
+            if (cursorIndex == 0) return 0f;
+            float px = 0f;
+            int count = 0;
+
+            foreach (var snippet in snippets)
+            {
+                if (snippet.emojiIndex != -1)
+                {
+                    int len = snippet.emojiIndex.ToString(CultureInfo.InvariantCulture).Length + 2;
+                    if (count + len <= cursorIndex)
+                    {
+                        px += snippet.myLength;
+                        count += len;
+                    }
+                    else break;
+                }
+                else if (snippet.message != null)
+                {
+                    int len = snippet.message.Length;
+                    if (count + len <= cursorIndex)
+                    {
+                        px += snippet.myLength;
+                        count += len;
+                    }
+                    else
+                    {
+                        px += font.MeasureString(snippet.message[..(cursorIndex - count)]).X;
+                        break;
+                    }
+                }
+            }
+            return px;
+        }
+
+        private static void UpdateScrollOffset(TextBoxState s, float cursorPixel, float maxWidth, float totalWidth)
+        {
             float cursorView = cursorPixel - s.ScrollOffset;
             if (cursorView > maxWidth) s.ScrollOffset = cursorPixel - maxWidth;
             else if (cursorView < 0) s.ScrollOffset = Math.Max(0, cursorPixel);
             s.ScrollOffset = Math.Clamp(s.ScrollOffset, 0, Math.Max(0, totalWidth - maxWidth));
+        }
 
-            // Set up clipping
-            Rectangle oldScissor = spriteBatch.GraphicsDevice.ScissorRectangle;
-            RasterizerState? oldRaster = spriteBatch.GraphicsDevice.RasterizerState;
-            spriteBatch.End();
+        private static (Rectangle, RasterizerState?) BeginClippedRendering(SpriteBatch b, ChatTextBox box)
+        {
+            Rectangle oldScissor = b.GraphicsDevice.ScissorRectangle;
+            RasterizerState? oldRaster = b.GraphicsDevice.RasterizerState;
+            b.End();
 
-            RasterizerState raster = new() { ScissorTestEnable = true };
-            Rectangle scissor = new(__instance.X + 16,
-                __instance.Y,
-                __instance.Width - 72,
-                __instance.Height);
-            spriteBatch.GraphicsDevice.ScissorRectangle = scissor;
-            spriteBatch.Begin(SpriteSortMode.Deferred, BlendState.AlphaBlend, SamplerState.PointClamp, null, raster);
+            b.GraphicsDevice.ScissorRectangle = new Rectangle(box.X + 16, box.Y, box.Width - 72, box.Height);
+            b.Begin(SpriteSortMode.Deferred, BlendState.AlphaBlend, SamplerState.PointClamp, null, new RasterizerState { ScissorTestEnable = true });
 
-            // Draw selection
-            if (s.SelectionStart != s.SelectionEnd)
-            {
-                int min = Math.Min(s.SelectionStart, s.SelectionEnd);
-                int max = Math.Max(s.SelectionStart, s.SelectionEnd);
-                float selStart = min > 0 ? font.MeasureString(s.FullText[..min]).X : 0f;
-                float selEnd = max > 0 ? font.MeasureString(s.FullText[..max]).X : 0f;
-                float textX = __instance.X + 16f - s.ScrollOffset;
-                spriteBatch.Draw(Game1.staminaRect,
-                    new Rectangle((int)(textX + selStart), __instance.Y + 8, (int)(selEnd - selStart), 32),
-                    new Color(0, 120, 215, 100));
-            }
+            return (oldScissor, oldRaster);
+        }
 
-            // Draw text and emojis
-            float x = __instance.X + 16f - s.ScrollOffset;
-            float y = __instance.Y + 12;
-            foreach (ChatSnippet? snippet in msg.message)
+        private static void EndClippedRendering(SpriteBatch b, Rectangle oldScissor, RasterizerState? oldRaster)
+        {
+            b.End();
+            b.GraphicsDevice.ScissorRectangle = oldScissor;
+            b.Begin(SpriteSortMode.Deferred, BlendState.AlphaBlend, SamplerState.PointClamp, null, oldRaster);
+        }
+
+        private static void DrawSelectionHighlight(SpriteBatch b, TextBoxState s, SpriteFont font, ChatTextBox box)
+        {
+            int min = Math.Min(s.SelectionStart, s.SelectionEnd);
+            int max = Math.Max(s.SelectionStart, s.SelectionEnd);
+
+            float startX = min > 0 ? font.MeasureString(s.FullText[..min]).X : 0f;
+            float endX = max > 0 ? font.MeasureString(s.FullText[..max]).X : 0f;
+
+            b.Draw(Game1.staminaRect,
+                new Rectangle((int)(box.X + TextBoxPadding - s.ScrollOffset + startX), box.Y + 8, (int)(endX - startX), 32),
+                new Color(0, 120, 215, 100));
+        }
+
+        private static void DrawTextContent(SpriteBatch b, List<ChatSnippet> snippets, ChatTextBox box, TextBoxState s, SpriteFont font, Color color)
+        {
+            float x = box.X + TextBoxPadding - s.ScrollOffset;
+            float y = box.Y + 12;
+
+            foreach (var snippet in snippets)
             {
                 if (snippet.emojiIndex != -1)
-                    spriteBatch.Draw(ChatBox.emojiTexture, new Vector2(x + 1f, y - 4f),
-                        new Rectangle(snippet.emojiIndex * 9 % ChatBox.emojiTexture.Width,
-                            snippet.emojiIndex * 9 / ChatBox.emojiTexture.Width * 9, 9, 9),
-                        Color.White, 0f, Vector2.Zero, 4f, SpriteEffects.None, 0.99f);
+                {
+                    b.Draw(ChatBox.emojiTexture, new Vector2(x + 1f, y - 4f),
+                       new Rectangle(snippet.emojiIndex * 9 % ChatBox.emojiTexture.Width,
+                           snippet.emojiIndex * 9 / ChatBox.emojiTexture.Width * 9, 9, 9),
+                       Color.White, 0f, Vector2.Zero, 4f, SpriteEffects.None, 0.99f);
+                }
                 else if (snippet.message != null)
-                    spriteBatch.DrawString(font, snippet.message, new Vector2(x, y), msg.color,
-                        0f, Vector2.Zero, 1f, SpriteEffects.None, 0.99f);
+                {
+                    b.DrawString(font, snippet.message, new Vector2(x, y), color, 0f, Vector2.Zero, 1f, SpriteEffects.None, 0.99f);
+                }
                 x += snippet.myLength;
             }
+        }
 
-            // Draw cursor
-            if (showCursor && __instance.Selected)
-            {
-                float cursorX = __instance.X + 16f + cursorPixel - s.ScrollOffset;
-                spriteBatch.Draw(Game1.staminaRect, new Rectangle((int)(cursorX - 1), __instance.Y + 8, 2, 32), color);
-            }
-
-            // Restore state
-            spriteBatch.End();
-            spriteBatch.GraphicsDevice.ScissorRectangle = oldScissor;
-            spriteBatch.Begin(SpriteSortMode.Deferred, BlendState.AlphaBlend, SamplerState.PointClamp, null, oldRaster);
-            return false;
+        private static void DrawCursor(SpriteBatch b, ChatTextBox box, float pixel, float offset, Color color)
+        {
+            b.Draw(Game1.staminaRect,
+                new Rectangle((int)(box.X + TextBoxPadding + pixel - offset - 1), box.Y + 8, 2, 32), color);
         }
     }
 
-    [HarmonyPatch(typeof(ChatBox), "update", typeof(GameTime))]
+    [HarmonyPatch(typeof(ChatBox), "update")]
     public class UpdatePatch
     {
         private static void Postfix(ChatBox __instance, GameTime time)
         {
             if (!__instance.chatBox.Selected) return;
-
             TextBoxState s = GetState(__instance.chatBox);
-            
-            // Check for idle snapshot (1 second of no typing)
             CheckIdleSnapshot(s);
-            
-            MouseState mouseState = Game1.input.GetMouseState();
-            bool isMousePressed = mouseState.LeftButton == ButtonState.Pressed;
 
-            // Handle drag selection
-            if (s.IsDragging && isMousePressed)
+            // Drag selection
+            bool mousePressed = Game1.input.GetMouseState().LeftButton == ButtonState.Pressed;
+            if (s.IsDragging && mousePressed)
             {
-                Point mouse = Game1.getMousePosition();
-                int mouseX = (int)(mouse.X / Game1.options.zoomLevel);
-
+                int mouseX = (int)(Game1.getMousePosition().X / Game1.options.zoomLevel);
                 if (mouseX >= __instance.chatBox.X && mouseX <= __instance.chatBox.X + __instance.chatBox.Width - 72)
                 {
-                    int newCursor = CalculateCursorFromClick(__instance, mouseX, s);
-                    s.SelectionEnd = newCursor;
-                    s.CursorIndex = newCursor;
+                    s.CursorIndex = s.SelectionEnd = CalculateCursorFromClick(__instance, mouseX, s);
                 }
             }
+            if (s.WasMousePressed && !mousePressed) s.IsDragging = false;
+            s.WasMousePressed = mousePressed;
 
-            if (s.WasMousePressed && !isMousePressed) s.IsDragging = false;
+            if (!(ModEntry.Instance?.Config.EnableCursorControl ?? false)) return;
 
-            s.WasMousePressed = isMousePressed;
-
-            if (!ModEntry.Instance.Config.EnableCursorControl) return;
-
+            // Repeats
             double now = time.TotalGameTime.TotalSeconds;
             KeyboardState keys = Game1.input.GetKeyboardState();
-            bool shift = keys.IsKeyDown(Keys.LeftShift) || keys.IsKeyDown(Keys.RightShift);
-            bool ctrl = keys.IsKeyDown(Keys.LeftControl) || keys.IsKeyDown(Keys.RightControl);
-
             float initDelay = ModEntry.Instance.Config.KeyRepeatInitialDelay;
             float repDelay = ModEntry.Instance.Config.KeyRepeatDelay;
+            bool ctrl = keys.IsKeyDown(Keys.LeftControl) || keys.IsKeyDown(Keys.RightControl);
+            bool shift = keys.IsKeyDown(Keys.LeftShift) || keys.IsKeyDown(Keys.RightShift);
 
-            HandleRepeat(keys.IsKeyDown(Keys.Left), now, initDelay, repDelay,
-                ref s.LastLeftPress, ref s.LastLeftRepeat,
-                () =>
-                {
-                    int newCursor = ctrl
-                        ? GetPrevSegmentStart(s.FullText, s.CursorIndex)
-                        : s.CursorIndex > 0
-                            ? s.CursorIndex - 1
-                            : s.CursorIndex;
-                    newCursor = SnapCursorToEmojiBoundary(s.FullText, newCursor, -1);
-                    if (newCursor != s.CursorIndex)
-                        UpdateSelection(s, newCursor, shift);
-                });
+            HandleRepeat(keys.IsKeyDown(Keys.Left), now, initDelay, repDelay, ref s.LastLeftPress, ref s.LastLeftRepeat, () =>
+            {
+                int nc = ctrl ? GetPrevSegmentStart(s.FullText, s.CursorIndex) : Math.Max(0, s.CursorIndex - 1);
+                int snapped = EmojiHelper.SnapToBoundary(s.FullText, nc, -1);
+                UpdateSelection(s, snapped, shift);
+            });
 
-            HandleRepeat(keys.IsKeyDown(Keys.Right), now, initDelay, repDelay,
-                ref s.LastRightPress, ref s.LastRightRepeat,
-                () =>
-                {
-                    int newCursor = ctrl
-                        ? GetNextSegmentEnd(s.FullText, s.CursorIndex)
-                        : s.CursorIndex < s.FullText.Length
-                            ? s.CursorIndex + 1
-                            : s.CursorIndex;
-                    newCursor = SnapCursorToEmojiBoundary(s.FullText, newCursor, 1);
-                    if (newCursor != s.CursorIndex)
-                        UpdateSelection(s, newCursor, shift);
-                });
+            HandleRepeat(keys.IsKeyDown(Keys.Right), now, initDelay, repDelay, ref s.LastRightPress, ref s.LastRightRepeat, () =>
+            {
+                int nc = ctrl ? GetNextSegmentEnd(s.FullText, s.CursorIndex) : Math.Min(s.FullText.Length, s.CursorIndex + 1);
+                int snapped = EmojiHelper.SnapToBoundary(s.FullText, nc, 1);
+                UpdateSelection(s, snapped, shift);
+            });
 
-            HandleRepeat(keys.IsKeyDown(Keys.Home), now, initDelay, repDelay,
-                ref s.LastHomePress, ref s.LastHomeRepeat,
-                () =>
-                {
-                    if (s.CursorIndex != 0)
-                        UpdateSelection(s, 0, shift);
-                });
+            HandleRepeat(keys.IsKeyDown(Keys.Home), now, initDelay, repDelay, ref s.LastHomePress, ref s.LastHomeRepeat, () =>
+           {
+               UpdateSelection(s, 0, shift);
+           });
 
-            HandleRepeat(keys.IsKeyDown(Keys.End), now, initDelay, repDelay,
-                ref s.LastEndPress, ref s.LastEndRepeat,
-                () =>
-                {
-                    if (s.CursorIndex != s.FullText.Length)
-                        UpdateSelection(s, s.FullText.Length, shift);
-                });
+            HandleRepeat(keys.IsKeyDown(Keys.End), now, initDelay, repDelay, ref s.LastEndPress, ref s.LastEndRepeat, () =>
+            {
+                UpdateSelection(s, s.FullText.Length, shift);
+            });
 
             HandleRepeat(ModEntry.Instance.Config.UndoKeybind.IsDown(), now, initDelay, repDelay,
                 ref s.LastUndoPress, ref s.LastUndoRepeat, () =>
@@ -1111,60 +937,6 @@ internal class ChatTextBoxPatches
                 });
         }
 
-        private static int CalculateCursorFromClick(ChatBox chatBox, int x, TextBoxState s)
-        {
-            float clickX = x - chatBox.chatBox.X - 16 + s.ScrollOffset;
-
-            ChatMessage msg = new();
-            msg.parseMessageForEmoji(s.FullText);
-
-            float curX = 0;
-            int charCount = 0, newCursor = 0;
-            SpriteFont? font = ChatBox.messageFont(LocalizedContentManager.CurrentLanguageCode);
-
-            foreach (ChatSnippet? snippet in msg.message)
-                if (snippet.emojiIndex != -1)
-                {
-                    if (curX + snippet.myLength / 2 > clickX)
-                    {
-                        newCursor = charCount;
-                        break;
-                    }
-
-                    curX += snippet.myLength;
-                    charCount += snippet.emojiIndex.ToString().Length + 2;
-                    newCursor = charCount;
-                }
-                else if (snippet.message != null)
-                {
-                    if (curX + snippet.myLength <= clickX)
-                    {
-                        curX += snippet.myLength;
-                        charCount += snippet.message.Length;
-                        newCursor = charCount;
-                    }
-                    else
-                    {
-                        for (int i = 0; i < snippet.message.Length; i++)
-                        {
-                            float charEndX = curX + font.MeasureString(snippet.message[..(i + 1)]).X;
-                            float charStartX = i > 0 ? curX + font.MeasureString(snippet.message[..i]).X : curX;
-                            float charMidX = (charStartX + charEndX) / 2;
-
-                            if (!(clickX < charMidX)) continue;
-                            newCursor = charCount + i;
-                            goto Found;
-                        }
-
-                        newCursor = charCount + snippet.message.Length;
-                        goto Found;
-                    }
-                }
-
-            Found:
-            return SnapCursorToEmojiBoundary(s.FullText, newCursor, 0);
-        }
-
         private static void HandleRepeat(bool isDown, double now, float initDelay, float repDelay,
             ref double lastPress, ref double lastRepeat, Action action)
         {
@@ -1172,23 +944,21 @@ internal class ChatTextBoxPatches
             {
                 if (lastPress.Equals(0))
                 {
-                    lastPress = now;
-                    lastRepeat = now;
-                }
-
-                if (now - lastPress >= initDelay && now - lastRepeat >= repDelay)
-                {
+                    lastPress = lastRepeat = now;
                     action();
+                }
+                else if (now - lastPress >= initDelay && now - lastRepeat >= repDelay)
+                {
                     lastRepeat = now;
+                    action();
                 }
             }
             else
             {
-                lastPress = lastRepeat = 0;
+                lastPress = 0;
             }
         }
-
-        #endregion
     }
+
+    #endregion
 }
-#pragma warning restore CS8602

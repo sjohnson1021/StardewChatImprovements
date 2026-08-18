@@ -1,48 +1,53 @@
 {
   "mod.name": "Chat Improvements",
   "mod.description": "Improves the chat box with longer messages and better editing.",
-
   "config.maxMessageLength.name": "Max Message Length",
   "config.maxMessageLength.tooltip": "The maximum number of characters allowed in a chat message.",
-
   "config.maxChatHistory.name": "Max Chat History",
   "config.maxChatHistory.tooltip": "Maximum number of messages to store in chat history. Higher values use more memory but let you scroll further back. (Default: 100)",
-
   "config.enableHorizontalScrolling.name": "Enable Horizontal Scrolling",
   "config.enableHorizontalScrolling.tooltip": "Enable horizontal scrolling when typing long messages.",
-
   "config.enableCursorControl.name": "Enable Cursor Control",
   "config.enableCursorControl.tooltip": "Enable cursor control (arrow keys) inside the chat box.",
-
+  "config.enableMessageColorButton.name": "Enable Message Color Button",
+  "config.enableMessageColorButton.tooltip": "Enable the message color button inside the chat box.",
   "config.allowUrlClickWhenChatClosed.name": "Open Links With Chat Closed",
   "config.allowUrlClickWhenChatClosed.tooltip": "Allow URLs to be clicked without opening chat.",
-
   "config.keyRepeatInitialDelay.name": "Key Repeat Initial Delay",
   "config.keyRepeatInitialDelay.tooltip": "Initial delay before key repeat starts when holding a key.",
-
   "config.keyRepeatDelay.name": "Key Repeat Delay",
   "config.keyRepeatDelay.tooltip": "Delay between repeated cursor movements when holding a key.",
-
   "config.copyKeybind.name": "Copy Keybind",
   "config.copyKeybind.tooltip": "Copy selected text to clipboard.",
-
   "config.cutKeybind.name": "Cut Keybind",
   "config.cutKeybind.tooltip": "Cut selected text to clipboard.",
-
   "config.pasteKeybind.name": "Paste Keybind",
   "config.pasteKeybind.tooltip": "Paste text from clipboard.",
-
   "config.selectAllKeybind.name": "Select All Keybind",
   "config.selectAllKeybind.tooltip": "Highlight everything inside text-box.",
-
   "config.undoKeybind.name": "Undo Keybind",
   "config.undoKeybind.tooltip": "Undo most recent change.",
-
   "config.redoKeybind.name": "Redo Keybind",
   "config.redoKeybind.tooltip": "Redo most recent change.",
-
   "hud.failedToOpenUrl": "Failed to open URL",
-  "hud.messageTooLong": "Message too long! Maximum {0} characters."
-
-
+  "hud.messageTooLong": "Message too long! Maximum {0} characters.",
+  "ui.colorPickerButton.tooltip": "Message Color",
+  "color.white": "White",
+  "color.red": "Red",
+  "color.blue": "Blue",
+  "color.green": "Green",
+  "color.jade": "Jade",
+  "color.yellowgreen": "Yellow Green",
+  "color.jungle": "Jungle",
+  "color.yellow": "Yellow",
+  "color.orange": "Orange",
+  "color.brown": "Brown",
+  "color.cream": "Cream",
+  "color.peach": "Peach",
+  "color.purple": "Purple",
+  "color.pink": "Pink",
+  "color.plum": "Plum",
+  "color.salmon": "Salmon",
+  "color.aqua": "Aqua",
+  "color.gray": "Gray"
 }

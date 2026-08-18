@@ -1,31 +1,32 @@
 using System.Reflection;
 using System.Reflection.Emit;
-using System.Text;
 using HarmonyLib;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
-using Microsoft.Xna.Framework.Input;
 using StardewModdingAPI;
 using StardewValley;
 using StardewValley.Menus;
-using System.Runtime.CompilerServices;
 
 namespace ChatImprovements;
 
-#pragma warning disable CS8602
 internal class ChatBoxScrollPatches
 {
     private static readonly Dictionary<ChatBox, ScrollState> ScrollStates = new();
+    private static readonly FieldInfo s_MessagesField = AccessTools.Field(typeof(ChatBox), "messages");
 
     // Color Picker State
-    public static readonly ConditionalWeakTable<ChatBox, ClickableTextureComponent> ColorPickerButtons = new();
-    public static readonly ConditionalWeakTable<ChatBox, ColorPickerMenu> ColorPickerMenus = new();
+    private static ClickableTextureComponent? _colorPickerButton;
+    private static ColorPickerMenu? _activeColorMenu;
 
-    private class ScrollState
+    private sealed class ScrollState
     {
-        public float ScrollOffset;
-        public float TargetScrollOffset;
-        public bool WasSelected;
+        public float ScrollOffset { get; set; }
+        public float TargetScrollOffset { get; set; }
+        public bool WasSelected { get; set; }
+
+        public bool WasColorButtonEnabled { get; set; }
+        public int LastChatBoxWidth { get; set; }
+        public int LastEmojiIconY { get; set; }
 
         public int MaxMessages => ModEntry.Instance?.Config.MaxChatHistory ?? 100;
     }
@@ -41,7 +42,7 @@ internal class ChatBoxScrollPatches
     #region Max Messages Patch
 
     [HarmonyPatch(typeof(ChatBox), MethodType.Constructor)]
-    public class ConstructorPatch
+    public sealed class ConstructorPatch
     {
         private static void Postfix(ChatBox __instance)
         {
@@ -55,7 +56,7 @@ internal class ChatBoxScrollPatches
     #region Scroll Wheel Handling
 
     [HarmonyPatch(typeof(ChatBox), "receiveScrollWheelAction")]
-    public class ReceiveScrollWheelActionPatch
+    public sealed class ReceiveScrollWheelActionPatch
     {
         private static bool Prefix(ChatBox __instance, int direction)
         {
@@ -67,8 +68,7 @@ internal class ChatBoxScrollPatches
 
             ScrollState state = GetScrollState(__instance);
 
-            FieldInfo? messagesField = AccessTools.Field(typeof(ChatBox), "messages");
-            if (messagesField?.GetValue(__instance) is not List<ChatMessage> messages)
+            if (s_MessagesField.GetValue(__instance) is not List<ChatMessage> messages)
                 return false;
 
             int totalHeight = CalculateTotalHeight(messages, true);
@@ -89,86 +89,83 @@ internal class ChatBoxScrollPatches
     #region Update Patch
 
     [HarmonyPatch(typeof(ChatBox), "update", typeof(GameTime))]
-    public class UpdateScrollPatch
+    public sealed class UpdateScrollPatch
     {
         private static void Postfix(ChatBox __instance, GameTime time)
         {
             ScrollState state = GetScrollState(__instance);
 
-            // When chat is first opened, fix heights of all existing messages
-            if (__instance.chatBox.Selected && !state.WasSelected)
+            // Scroll smoothing
+            if (Math.Abs(state.ScrollOffset - state.TargetScrollOffset) > 0.1f)
             {
-                FieldInfo? messagesField = AccessTools.Field(typeof(ChatBox), "messages");
-                if (messagesField?.GetValue(__instance) is List<ChatMessage> messages)
-                {
-                    foreach (ChatMessage msg in messages)
-                    {
-                        FixMessageHeight(msg, __instance.chatBox.Width);
-                    }
-                }
-
-                state.ScrollOffset = 0;
-                state.TargetScrollOffset = 0;
-            }
-
-            state.WasSelected = __instance.chatBox.Selected;
-
-            if (Math.Abs(state.ScrollOffset - state.TargetScrollOffset) > 0.5f)
-            {
-                float delta = state.TargetScrollOffset - state.ScrollOffset;
-                state.ScrollOffset += delta * 0.25f;
+                state.ScrollOffset = Utility.Lerp(state.ScrollOffset, state.TargetScrollOffset, 0.2f);
             }
             else
             {
                 state.ScrollOffset = state.TargetScrollOffset;
             }
 
-            FieldInfo? messagesField2 = AccessTools.Field(typeof(ChatBox), "messages");
-            if (messagesField2?.GetValue(__instance) is not List<ChatMessage> messages2)
-                return;
+            // Update Color Picker Button ONLY when relevant state changes
+            HandleColorPickerButton(__instance, state);
+        }
 
-            int totalHeight = CalculateTotalHeight(messages2, __instance.chatBox.Selected);
-            int visibleHeight = GetVisibleHeight(__instance);
-            int maxScroll = Math.Max(0, totalHeight - visibleHeight);
+        private static void HandleColorPickerButton(ChatBox chatBox, ScrollState state)
+        {
+            bool isColorButtonEnabled = ModEntry.Instance?.Config.EnableMessageColorButton ?? false;
+            bool chatSelected = chatBox.chatBox.Selected;
 
-            state.ScrollOffset = Math.Clamp(state.ScrollOffset, 0, maxScroll);
-            state.TargetScrollOffset = Math.Clamp(state.TargetScrollOffset, 0, maxScroll);
+            // Detect state changes
+            bool enabledChanged = isColorButtonEnabled != state.WasColorButtonEnabled;
+            bool selectionChanged = chatSelected != state.WasSelected;
+            bool positionChanged = chatBox.chatBox.Width != state.LastChatBoxWidth ||
+                                   chatBox.emojiMenuIcon.bounds.Y != state.LastEmojiIconY;
 
-            // Update Color Picker Button
-            if (__instance.chatBox.Selected)
+            // Only update if something changed
+            if (enabledChanged || selectionChanged || positionChanged)
             {
-                if (!ColorPickerButtons.TryGetValue(__instance, out var colorButton))
+                if (chatSelected && isColorButtonEnabled)
                 {
-                    colorButton = new ClickableTextureComponent(
-                        new Rectangle(0, 0, 48, 48),
-                        Game1.mouseCursors,
-                        new Rectangle(119, 469, 16, 16),
-                        3f)
+                    // Create button if needed
+                    if (_colorPickerButton == null)
                     {
-                        hoverText = "Message Color"
-                    };
-                    ColorPickerButtons.AddOrUpdate(__instance, colorButton);
+                        _colorPickerButton = new ClickableTextureComponent(
+                            new Rectangle(0, 0, 48, 48),
+                            Game1.mouseCursors,
+                            new Rectangle(119, 469, 16, 16),
+                            3f)
+                        {
+                            hoverText = ModEntry.Instance.Helper.Translation.Get("ui.colorPickerButton.tooltip")
+                        };
+                    }
+
+                    // Update position
+                    _colorPickerButton.bounds.X = chatBox.xPositionOnScreen + chatBox.chatBox.Width + 8;
+                    _colorPickerButton.bounds.Y = chatBox.emojiMenuIcon.bounds.Y - 6;
+
+                    // Clamp to screen
+                    if (_colorPickerButton.bounds.Bottom > Game1.uiViewport.Height)
+                        _colorPickerButton.bounds.Y = Game1.uiViewport.Height - _colorPickerButton.bounds.Height;
+
+                    // Cache position
+                    state.LastChatBoxWidth = chatBox.chatBox.Width;
+                    state.LastEmojiIconY = chatBox.emojiMenuIcon.bounds.Y;
                 }
-
-
-                // Position to the right of the chatbox
-                colorButton.bounds.X = __instance.xPositionOnScreen + __instance.chatBox.Width + 8;
-                // Center vertically with emoji button (36px high)
-                // Our button is 16*3 = 48px high.
-                // emojiMenuIcon.bounds.Y is chatBox.Y + 8.
-                // Center: emojiY + (36 - 48)/2 = emojiY - 6
-                colorButton.bounds.Y = __instance.emojiMenuIcon.bounds.Y - 6;
-
-                // Ensure button doesn't go offscreen
-                if (colorButton.bounds.Bottom > Game1.uiViewport.Height)
-                    colorButton.bounds.Y = Game1.uiViewport.Height - colorButton.bounds.Height;
-
-                // Update Menu if open
-                if (ColorPickerMenus.TryGetValue(__instance, out var menu))
+                else
                 {
-                    // Keep menu centered or positioned?
-                    // It's already positioned in Constructor.
+                    // Destroy button when disabled or chat closed
+                    _colorPickerButton = null;
                 }
+
+                // Update cached state
+                state.WasColorButtonEnabled = isColorButtonEnabled;
+                state.WasSelected = chatSelected;
+            }
+
+            // Close color menu when chat closes (lightweight check)
+            if (!chatSelected && _activeColorMenu != null)
+            {
+                _activeColorMenu.exitThisMenu();
+                _activeColorMenu = null;
             }
         }
     }
@@ -177,10 +174,8 @@ internal class ChatBoxScrollPatches
 
     #region Position Patch
 
-    #region Position Patch
-
     [HarmonyPatch(typeof(ChatBox), "updatePosition")]
-    public class UpdatePositionPatch
+    public sealed class UpdatePositionPatch
     {
         private static void Postfix(ChatBox __instance)
         {
@@ -210,19 +205,16 @@ internal class ChatBoxScrollPatches
 
     #endregion
 
-    #endregion
-
     #region Draw Patch
 
     [HarmonyPatch(typeof(ChatBox), "draw")]
-    public class DrawScrollPatch
+    public sealed class DrawScrollPatch
     {
         private static bool Prefix(ChatBox __instance, SpriteBatch b)
         {
             ScrollState state = GetScrollState(__instance);
 
-            FieldInfo? messagesField = AccessTools.Field(typeof(ChatBox), "messages");
-            if (messagesField?.GetValue(__instance) is not List<ChatMessage> messages)
+            if (s_MessagesField.GetValue(__instance) is not List<ChatMessage> messages)
                 return true;
 
             if (__instance.chatBox.Selected)
@@ -274,6 +266,7 @@ internal class ChatBoxScrollPatches
                     heightSoFar += message.verticalSize;
 
                     // Calculate Y position (same as original: y - heightSoFar - 8)
+                    // Calculate Y position (same as original: y - heightSoFar - 8)
                     int drawY = __instance.yPositionOnScreen - (int)heightSoFar - 8;
 
                     // Check if message is visible in clipping region
@@ -306,23 +299,23 @@ internal class ChatBoxScrollPatches
                 }
 
                 // Draw Color Picker Button
-                if (ColorPickerButtons.TryGetValue(__instance, out var colorButton))
+                if (_colorPickerButton != null)
                 {
-                    colorButton.tryHover(Game1.getMouseX(), Game1.getMouseY());
+                    _colorPickerButton.tryHover(Game1.getMouseX(), Game1.getMouseY());
 
                     // Tint button with current color -> Disabled by user request
-                    colorButton.draw(b, Color.White, 0.99f);
+                    _colorPickerButton.draw(b, Color.White, 0.99f);
 
-                    if (colorButton.containsPoint(Game1.getMouseX(), Game1.getMouseY()))
+                    if (_colorPickerButton.containsPoint(Game1.getMouseX(), Game1.getMouseY()))
                     {
-                        IClickableMenu.drawHoverText(b, colorButton.hoverText, Game1.smallFont);
+                        IClickableMenu.drawHoverText(b, _colorPickerButton.hoverText, Game1.smallFont);
                     }
                 }
 
                 // Draw Color Picker Menu
-                if (ColorPickerMenus.TryGetValue(__instance, out var menu))
+                if (_activeColorMenu != null)
                 {
-                    menu.draw(b);
+                    _activeColorMenu.draw(b);
                 }
 
                 if (__instance.isWithinBounds(Game1.getMouseX(), Game1.getMouseY()) && !Game1.options.hardwareCursor)
@@ -381,55 +374,50 @@ internal class ChatBoxScrollPatches
     #region Color Picker Input
 
     [HarmonyPatch(typeof(ChatBox), "receiveLeftClick")]
-    public class ReceiveLeftClickColorPatch
+    public sealed class ReceiveLeftClickColorPatch
     {
         private static bool Prefix(ChatBox __instance, int x, int y)
         {
             if (!__instance.chatBox.Selected) return true;
 
-            // Handle Menu Clicks
-            if (ColorPickerMenus.TryGetValue(__instance, out var menu))
-            {
-                if (menu.isWithinBounds(x, y))
-                {
-                    menu.receiveLeftClick(x, y);
-
-                    // If we clicked an option, close menu?
-                    // The menu handles color selection.
-                    // We can check if we should close.
-                    // For now, let's close on any click inside boundaries if it wasn't a close button?
-                    // Actually, let's just let the menu logic run.
-                    return false; // Consume click
-                }
-            }
 
             // Handle Button Click
-            if (ColorPickerButtons.TryGetValue(__instance, out var colorButton))
+            if (_colorPickerButton != null)
             {
-                if (colorButton.containsPoint(x, y))
+                if (_colorPickerButton.containsPoint(x, y))
                 {
                     Game1.playSound("drumkit6");
 
-                    if (ColorPickerMenus.TryGetValue(__instance, out var existingMenu))
+                    if (_activeColorMenu != null)
                     {
-                        ColorPickerMenus.Remove(__instance);
+                        _activeColorMenu.exitThisMenu();
+                        _activeColorMenu = null;
                     }
                     else
                     {
-                        ColorPickerMenus.AddOrUpdate(__instance,
-                            new ColorPickerMenu(__instance, (_) => ColorPickerMenus.Remove(__instance)));
+                        _activeColorMenu = new ColorPickerMenu(__instance, (_) =>
+                        {
+                            _activeColorMenu?.exitThisMenu(false);
+                            _activeColorMenu = null;
+                        });
                     }
 
                     return false;
                 }
             }
 
-            // Close menu if clicked outside
-            if (ColorPickerMenus.TryGetValue(__instance, out var _))
+
+            // Handle Menu Clicks
+            if (_activeColorMenu != null)
             {
-                // If we reached here, we clicked outside the menu (and outside the button)
-                ColorPickerMenus.Remove(__instance);
-                // Don't return false, let others handle the click (e.g. typing or emoji)
+                if (_activeColorMenu.isWithinBounds(x, y))
+                {
+                    _activeColorMenu.receiveLeftClick(x, y);
+                    return false; // Consume click
+                }
+
+                _activeColorMenu?.exitThisMenu();
+                _activeColorMenu = null;
             }
 
             return true;
@@ -441,16 +429,16 @@ internal class ChatBoxScrollPatches
     #region isWithinBounds Patch
 
     [HarmonyPatch(typeof(ChatBox), "isWithinBounds")]
-    public class IsWithinBoundsPatch
+    public sealed class IsWithinBoundsPatch
     {
         private static void Postfix(ChatBox __instance, int x, int y, ref bool __result)
         {
             if (__result) return;
 
             // Check Color Picker Button
-            if (ColorPickerButtons.TryGetValue(__instance, out var colorButton))
+            if (_colorPickerButton != null)
             {
-                if (colorButton.containsPoint(x, y))
+                if (_colorPickerButton.containsPoint(x, y))
                 {
                     __result = true;
                     return;
@@ -458,9 +446,9 @@ internal class ChatBoxScrollPatches
             }
 
             // Check Color Picker Menu
-            if (ColorPickerMenus.TryGetValue(__instance, out var menu))
+            if (_activeColorMenu != null)
             {
-                if (menu.isWithinBounds(x, y))
+                if (_activeColorMenu.isWithinBounds(x, y))
                 {
                     __result = true;
                     return;
@@ -556,7 +544,7 @@ internal class ChatBoxScrollPatches
     /// Fix message height calculation for multi-line messages
     /// </summary>
     [HarmonyPatch(typeof(ChatBox), "receiveChatMessage")]
-    public class ReceiveChatMessagePatch
+    public sealed class ReceiveChatMessagePatch
     {
         private static void Prefix(ChatBox __instance)
         {
@@ -567,11 +555,9 @@ internal class ChatBoxScrollPatches
         private static void Postfix(ChatBox __instance)
         {
             // Get the messages list
-            FieldInfo? messagesField = AccessTools.Field(typeof(ChatBox), "messages");
-            if (messagesField?.GetValue(__instance) is not List<ChatMessage> messages || messages.Count == 0)
+            if (s_MessagesField.GetValue(__instance) is not List<ChatMessage> messages || messages.Count == 0)
                 return;
 
-            // Fix the height of the most recently added message
             // Fix the height of the most recently added message
             ChatMessage lastMessage = messages[messages.Count - 1];
             FixMessageHeight(lastMessage, __instance.chatBox.Width);
@@ -579,22 +565,7 @@ internal class ChatBoxScrollPatches
 
         private static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions)
         {
-            MethodInfo parseTextMethod = AccessTools.Method(typeof(Game1), nameof(Game1.parseText),
-                new[] { typeof(string), typeof(SpriteFont), typeof(int) });
-            MethodInfo customParseMethod =
-                AccessTools.Method(typeof(ChatBoxScrollPatches), nameof(ParseTextWithWrapping));
-
-            foreach (var instruction in instructions)
-            {
-                if (instruction.Calls(parseTextMethod))
-                {
-                    yield return new CodeInstruction(OpCodes.Call, customParseMethod);
-                }
-                else
-                {
-                    yield return instruction;
-                }
-            }
+            return SharedTranspilerLogic(instructions);
         }
     }
 
@@ -602,13 +573,12 @@ internal class ChatBoxScrollPatches
     /// Fix message height calculation for addMessage
     /// </summary>
     [HarmonyPatch(typeof(ChatBox), "addMessage")]
-    public class AddMessagePatch
+    public sealed class AddMessagePatch
     {
         private static void Postfix(ChatBox __instance)
         {
             // Get the messages list
-            FieldInfo? messagesField = AccessTools.Field(typeof(ChatBox), "messages");
-            if (messagesField?.GetValue(__instance) is not List<ChatMessage> messages || messages.Count == 0)
+            if (s_MessagesField.GetValue(__instance) is not List<ChatMessage> messages || messages.Count == 0)
                 return;
 
             // Fix the height of the most recently added message
@@ -618,178 +588,37 @@ internal class ChatBoxScrollPatches
 
         private static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions)
         {
-            MethodInfo parseTextMethod = AccessTools.Method(typeof(Game1), nameof(Game1.parseText),
-                new[] { typeof(string), typeof(SpriteFont), typeof(int) });
-            MethodInfo customParseMethod =
-                AccessTools.Method(typeof(ChatBoxScrollPatches), nameof(ParseTextWithWrapping));
-
-            foreach (var instruction in instructions)
-            {
-                if (instruction.Calls(parseTextMethod))
-                {
-                    yield return new CodeInstruction(OpCodes.Call, customParseMethod);
-                }
-                else
-                {
-                    yield return instruction;
-                }
-            }
+            return SharedTranspilerLogic(instructions);
         }
     }
 
-    public static string ParseTextWithWrapping(string text, SpriteFont font, int width)
+    private static IEnumerable<CodeInstruction> SharedTranspilerLogic(IEnumerable<CodeInstruction> instructions)
     {
-        // Reduce width slightly more to prevent overlap with the right border
-        // User reported overlap up to 8px, so we remove an extra 12px for safety
-        width += 14;
+        MethodInfo parseTextMethod = AccessTools.Method(typeof(Game1), nameof(Game1.parseText),
+            new[] { typeof(string), typeof(SpriteFont), typeof(int) });
 
-        if (string.IsNullOrEmpty(text))
-            return "";
+        MethodInfo customParseMethod =
+            AccessTools.Method(typeof(TextHelper), nameof(TextHelper.ParseTextWithWrapping));
 
-        System.Text.StringBuilder result = new();
-        string[] lines = text.Split(new[] { "\r\n", "\n" }, StringSplitOptions.None);
-
-        for (int i = 0; i < lines.Length; i++)
+        foreach (var instruction in instructions)
         {
-            if (i > 0) result.AppendLine();
-
-            string currentLine = lines[i];
-            if (string.IsNullOrEmpty(currentLine)) continue;
-
-            string[] words = currentLine.Split(' ');
-            float currentLineWidth = 0f;
-            float spaceWidth = font.MeasureString(" ").X;
-            bool firstWordInLine = true;
-
-            foreach (string word in words)
+            if (instruction.Calls(parseTextMethod))
             {
-                float wordWidth = font.MeasureString(word).X;
-
-                // Handle words that are longer than the entire width by themselves
-                if (wordWidth > width)
-                {
-                    // If we have content on the current line, wrap first
-                    if (!firstWordInLine)
-                    {
-                        result.AppendLine();
-                        currentLineWidth = 0f;
-                        firstWordInLine = true;
-                    }
-
-                    // Split the long word
-                    string remainingWord = word;
-                    while (font.MeasureString(remainingWord).X > width)
-                    {
-                        // Find the split point
-                        int splitIndex = 0;
-                        float partialWidth = 0f;
-                        for (int k = 0; k < remainingWord.Length; k++)
-                        {
-                            float charWidth = font.MeasureString(remainingWord[k].ToString()).X;
-                            if (partialWidth + charWidth > width)
-                            {
-                                break;
-                            }
-
-                            partialWidth += charWidth;
-                            splitIndex++;
-                        }
-
-                        // Safety check to ensure we make progress
-                        if (splitIndex == 0) splitIndex = 1;
-
-                        result.Append(remainingWord.Substring(0, splitIndex));
-                        result.AppendLine();
-                        remainingWord = remainingWord.Substring(splitIndex);
-                    }
-
-                    // Append the remainder of the long word
-                    result.Append(remainingWord);
-                    currentLineWidth = font.MeasureString(remainingWord).X;
-                    firstWordInLine = false;
-
-                    // Add space after this word if it's not the last
-                    // (The loop logic below normally adds space before, but since we just handled a word...
-                    // actually, simple logic: we are consuming 'word' from the split list.
-                    // The standard loop logic appends space if !firstWordInLine.
-                    // We just finished a word. The NEXT word will trigger the space add.)
-                    continue;
-                }
-
-                // Normal word handling
-                if (!firstWordInLine)
-                {
-                    if (currentLineWidth + spaceWidth + wordWidth > width)
-                    {
-                        result.AppendLine();
-                        currentLineWidth = 0f;
-                        firstWordInLine = true;
-                    }
-                    else
-                    {
-                        result.Append(" ");
-                        currentLineWidth += spaceWidth;
-                    }
-                }
-
-                result.Append(word);
-                currentLineWidth += wordWidth;
-                firstWordInLine = false;
+                yield return new CodeInstruction(OpCodes.Call, customParseMethod);
+            }
+            else
+            {
+                yield return instruction;
             }
         }
-
-        return result.ToString();
     }
 
-    //Likely need to patch addMessage and receiveChatMessage as this is where we call the parseText method with a specified width (chatboxWidth - 8), we need to adjust this and lower the width by an additional 8 to account for the padding
-    //Here is the base code from the decompiled game:
-    /*
-     *
-     *
-        public virtual void receiveChatMessage(long sourceFarmer, int chatKind, LocalizedContentManager.LanguageCode language, string message)
-        {
-            string text = formatMessage(sourceFarmer, chatKind, message);
-            ChatMessage c = new ChatMessage();
-            string s = Game1.parseText(text, chatBox.Font, chatBox.Width - 16);
-            c.timeLeftToDisplay = 600;
-            c.verticalSize = (int)chatBox.Font.MeasureString(s).Y + 4;
-            c.color = messageColor(chatKind);
-            c.language = language;
-            c.parseMessageForEmoji(s);
-            messages.Add(c);
-            if (messages.Count > maxMessages)
-            {
-                messages.RemoveAt(0);
-            }
-            if (chatKind == 3 && sourceFarmer != Game1.player.UniqueMultiplayerID)
-            {
-                lastReceivedPrivateMessagePlayerId = sourceFarmer;
-            }
-        }
-
-        public virtual void addMessage(string message, Color color)
-        {
-            ChatMessage c = new ChatMessage();
-            string s = Game1.parseText(message, chatBox.Font, chatBox.Width - 8);
-            c.timeLeftToDisplay = 600;
-            c.verticalSize = (int)chatBox.Font.MeasureString(s).Y + 4;
-            c.color = color;
-            c.language = LocalizedContentManager.CurrentLanguageCode;
-            c.parseMessageForEmoji(s);
-            messages.Add(c);
-            if (messages.Count > maxMessages)
-            {
-                messages.RemoveAt(0);
-            }
-        }
-     *
-     */
 
 
     private static void FixMessageHeight(ChatMessage message, int chatBoxWidth)
     {
         // Count the actual lines using the same logic as the draw method
-        int lineCount = CountMessageLines(message);
+        int lineCount = TextHelper.CountMessageLines(message);
 
         // Each line needs space based on font measurement
         // Use the same measurement the game uses
@@ -802,62 +631,8 @@ internal class ChatBoxScrollPatches
 
         // The game uses MeasureString("(").Y for line height
         float lineHeight = font.MeasureString("(").Y;
-        message.verticalSize = (int)(lineCount * lineHeight) + 12;
-    }
-
-    private static int CountMessageLines(ChatMessage message)
-    {
-        if (message.message == null || message.message.Count == 0)
-            return 1;
-
-        // Replicate the EXACT logic from ChatMessage.draw()
-        float xPositionSoFar = 0f;
-        int lineCount = 1; // Start with 1 line
-        const float maxLineWidth = 860f;
-
-        for (int i = 0; i < message.message.Count; i++)
-        {
-            ChatSnippet snippet = message.message[i];
-
-            if (snippet.emojiIndex != -1)
-            {
-                // Emoji - just add its width
-                xPositionSoFar += snippet.myLength;
-            }
-            else if (snippet.message != null)
-            {
-                if (snippet.message.Equals(Environment.NewLine))
-                {
-                    // Explicit newline - reset x position and add line
-                    xPositionSoFar = 0f;
-                    lineCount++;
-                }
-                else
-                {
-                    // Regular text - add its width
-                    xPositionSoFar += snippet.myLength;
-                }
-            }
-
-            // Check for wrapping (same as draw method)
-            if (xPositionSoFar >= maxLineWidth)
-            {
-                xPositionSoFar = 0f;
-                lineCount++;
-
-                // If next snippet is a newline, skip it (same as draw method)
-                if (i + 1 < message.message.Count &&
-                    message.message[i + 1].message != null &&
-                    message.message[i + 1].message.Equals(Environment.NewLine))
-                {
-                    i++;
-                }
-            }
-        }
-
-        return lineCount;
+        message.verticalSize = (int)(lineCount * lineHeight) + 2;
     }
 
     #endregion
 }
-#pragma warning restore CS8602

@@ -1,5 +1,9 @@
+using System;
+using System.Collections.Generic;
 using System.Diagnostics;
+using System.Linq;
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Text.RegularExpressions;
 using HarmonyLib;
@@ -12,25 +16,63 @@ using StardewValley.Menus;
 
 namespace ChatImprovements;
 
-internal class ChatUrlPatches
+/// <summary>
+/// Harmony patches for rendering chat messages with enhanced features:
+/// - Clickable URLs
+/// - Bold sender names
+/// - Properly aligned underlines
+/// </summary>
+internal class ChatMessagePatches
 {
-    private static readonly List<UrlRegion> ActiveUrlRegions = new();
+    // Constants
+    private const float MaxLineWidth = 888f; // Matches vanilla chat width
+    private const float EmojiScale = 4f;
+    private const int EmojiSize = 9;
+    private const int UnderlineYOffset = 8;
+    
+    private static readonly Color UrlColor = new(100, 149, 237);
+    private static readonly Color ShadowColorBase = new(125, 125, 125, 255);
 
+    // State
+    private static readonly List<UrlRegion> ActiveUrlRegions = new();
+    private static bool _wasMousePressed;
+
+    // Cache
     private static readonly Regex UrlRegex = new(@"https?://[^\s]+",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
-    private static bool _wasMousePressed;
+    private static readonly ConditionalWeakTable<ChatMessage, List<RichTextToken>> CachedMessageTokens = new();
+    private static readonly ConditionalWeakTable<ChatMessage, string> SenderNames = new();
 
-    // Cache which messages have URLs to avoid re-checking every frame
-    private static readonly HashSet<ChatMessage> MessagesWithUrls = new();
+    #region Nested Types
 
-    #region Cross-Platform URL Opening
+    private sealed class RichTextToken
+    {
+        public string Text = "";
+        public bool IsBold;
+        public bool IsUrl;
+        public bool IsUnderlined;
+        public bool IsEmoji;
+        public int EmojiIndex;
+        public bool IsNewLine;
+        public float Width;
+    }
+
+    private sealed class UrlRegion
+    {
+        public Rectangle Bounds;
+        public ChatMessage? Message;
+        public string Url = "";
+    }
+
+    #endregion
+
+    #region Helpers
 
     private static void OpenUrl(string url)
     {
         try
         {
-            // Validate URL starts with http:// or https://
             if (!url.StartsWith("http://", StringComparison.OrdinalIgnoreCase) &&
                 !url.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
             {
@@ -42,11 +84,7 @@ internal class ChatUrlPatches
 
             if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
             {
-                Process.Start(new ProcessStartInfo
-                {
-                    FileName = url,
-                    UseShellExecute = true
-                });
+                Process.Start(new ProcessStartInfo { FileName = url, UseShellExecute = true });
             }
             else if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
             {
@@ -58,11 +96,7 @@ internal class ChatUrlPatches
             }
             else
             {
-                Process.Start(new ProcessStartInfo
-                {
-                    FileName = url,
-                    UseShellExecute = true
-                });
+                Process.Start(new ProcessStartInfo { FileName = url, UseShellExecute = true });
             }
         }
         catch (Exception ex)
@@ -76,28 +110,16 @@ internal class ChatUrlPatches
 
     #endregion
 
-    private class UrlRegion
-    {
-        public Rectangle Bounds;
-        public ChatMessage? Message;
-        public string Url = "";
-    }
-
     #region Sender Name Tracking
 
-    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<ChatMessage, string> SenderNames =
-        new();
-
     [HarmonyPatch(typeof(ChatBox), "receiveChatMessage")]
-    public class ReceiveChatMessagePatch
+    public sealed class ReceiveChatMessagePatch
     {
         private static void Postfix(ChatBox __instance, long sourceFarmer, int chatKind, string message)
         {
-            // Get the last added message
             if (__instance.messages.Count == 0) return;
             ChatMessage lastMsg = __instance.messages[^1];
 
-            // Resolve sender name
             string? senderName = null;
             if (chatKind == 0 || chatKind == 3) // Chat or Private
             {
@@ -109,9 +131,7 @@ internal class ChatUrlPatches
 
                 if (farmer != null)
                 {
-                    senderName = ChatBox.formattedUserName(farmer);
-                    // Add the separator that the game adds
-                    senderName += ": ";
+                    senderName = ChatBox.formattedUserName(farmer) + ": ";
                 }
             }
 
@@ -124,220 +144,245 @@ internal class ChatUrlPatches
 
     #endregion
 
-    #region URL and Bold Name Rendering
+    #region Rendering
 
-    /// <summary>
-    ///     Patch to render URLs with special formatting and track their bounds
-    ///     Also renders sender name in bold
-    /// </summary>
     [HarmonyPatch(typeof(ChatMessage), "draw")]
-    public class DrawMessagePatch
+    public sealed class DrawMessagePatch
     {
         private static bool Prefix(ChatMessage __instance, SpriteBatch b, int x, int y)
         {
-            // Check if this message has URLs (using cache or scanning)
-            bool hasUrls = MessagesWithUrls.Contains(__instance);
-
-            // Check if we have a sender name to bold
             bool hasSenderName = SenderNames.TryGetValue(__instance, out string? senderName);
 
-            if (!hasUrls && !hasSenderName)
+            // Check if we need to take over drawing
+            if (!CachedMessageTokens.TryGetValue(__instance, out List<RichTextToken>? tokens))
             {
-                // Not in cache - scan for URLs to decide if we need to take over drawing
-                // We ALWAYS take over if we need to bold the name, but if we don't know yet:
-                foreach (ChatSnippet? snippet in __instance.message)
+                bool hasUrls = false;
+                var messageSnippets = __instance.message;
+                for (int i = 0; i < messageSnippets.Count; i++)
                 {
-                    if (snippet.message == null || !UrlRegex.IsMatch(snippet.message)) continue;
-                    hasUrls = true;
-                    MessagesWithUrls.Add(__instance);
-                    break;
+                    var snippet = messageSnippets[i];
+                    if (snippet.message != null && UrlRegex.IsMatch(snippet.message))
+                    {
+                        hasUrls = true;
+                        break;
+                    }
                 }
+
+                if (!hasUrls && !hasSenderName)
+                    return true; // Use vanilla drawing
+
+                // Parse and cache with value factory to avoid race Add
+                tokens = CachedMessageTokens.GetValue(__instance, _ => ParseMessage(__instance, senderName, ChatBox.messageFont(__instance.language)));
             }
 
-            // If no URLs and no name to bold, use original method
-            if (!hasUrls && !hasSenderName) return true;
-
-            // Clear URL regions for this message
+            // Clear old regions for this message
             ActiveUrlRegions.RemoveAll(r => r.Message == __instance);
 
-            float xPositionSoFar = 0f;
-            float yPositionSoFar = 0f;
             SpriteFont? font = ChatBox.messageFont(__instance.language);
             if (font is null) return true;
 
-            // Track how much text we've drawn to know when we are inside the sender name
-            int charactersDrawnSoFar = 0;
-            int senderNameLength = senderName?.Length ?? 0;
-
-            for (int i = 0; i < __instance.message.Count; i++)
+            float xPos = 0f;
+            float yPos = 0f;
+            float lineHeight = font.MeasureString("(").Y;
+            int currentTokenIndex = 0;
+            int newlineCount = 0;
+            foreach (RichTextToken token in tokens)
             {
-                ChatSnippet? snippet = __instance.message[i];
+                // Handle explicit newlines
+                if (token.IsNewLine && newlineCount >= 0)
+                {
+                    xPos = 0f;
+                    yPos += lineHeight;
+                    newlineCount++;
+                    currentTokenIndex++;
+                    continue;
+                }
 
+                // Handle wrapping
+                if (xPos + token.Width >= MaxLineWidth)
+                {
+                    xPos = 0f;
+                    yPos += lineHeight;
+                    newlineCount++;
+                }
+
+                Vector2 position = new(x + xPos, y + yPos);
+
+                if (token.IsUrl)
+                {
+                    DrawUrl(b, font, token, position, __instance);
+                }
+                else if (token.IsBold)
+                {
+                    DrawBoldText(b, font, token, position, __instance);
+                }
+                else if (token.IsEmoji)
+                {
+                    DrawEmoji(b, token, position, __instance);
+                }
+                else
+                {
+                    b.DrawString(font, token.Text, position, __instance.color * __instance.alpha, 0f, Vector2.Zero, 1f, SpriteEffects.None, 0.99f);
+                }
+                currentTokenIndex++;
+                xPos += token.Width;
+            }
+
+            return false;
+        }
+
+        private static void DrawUrl(SpriteBatch b, SpriteFont font, RichTextToken token, Vector2 position, ChatMessage msg)
+        {
+            Color urlColor = UrlColor * msg.alpha;
+            b.DrawString(font, token.Text, position, urlColor, 0f, Vector2.Zero, 1f, SpriteEffects.None, 0.99f);
+
+            // Underline
+            float textHeight = font.MeasureString(token.Text).Y;
+            b.Draw(Game1.staminaRect,
+                new Rectangle((int)position.X + 2, (int)(position.Y + textHeight - UnderlineYOffset), (int)token.Width - 4, 2),
+                urlColor);
+
+            var region = new UrlRegion
+            {
+                Url = token.Text,
+                Bounds = new Rectangle((int)position.X, (int)position.Y, (int)token.Width, (int)textHeight),
+                Message = msg
+            };
+            if (!ActiveUrlRegions.Any(r => r.Message == region.Message && r.Url == region.Url && r.Bounds == region.Bounds))
+                ActiveUrlRegions.Add(region);
+        }
+
+        private static void DrawBoldText(SpriteBatch b, SpriteFont font, RichTextToken token, Vector2 position, ChatMessage msg)
+        {
+            Color shadowColor = Utility.MultiplyColor(msg.color * msg.alpha, ShadowColorBase);
+
+            Utility.drawTextWithColoredShadow(b, token.Text, font, position,
+                msg.color * msg.alpha, shadowColor, 1f, .99f, -1, 0, 2);
+
+            if (token.IsUnderlined)
+            {
+                float lineHeight = font.MeasureString("(").Y;
+                int lineY = (int)(position.Y + lineHeight - UnderlineYOffset);
+
+                // Shadow Line
+                b.Draw(Game1.staminaRect, new Rectangle((int)position.X, lineY, (int)token.Width - 2, 2), shadowColor);
+                // Main Line
+                b.Draw(Game1.staminaRect, new Rectangle((int)position.X + 2, lineY, (int)token.Width - 4, 2), msg.color * msg.alpha);
+            }
+        }
+
+        private static void DrawEmoji(SpriteBatch b, RichTextToken token, Vector2 position, ChatMessage msg)
+        {
+            b.Draw(ChatBox.emojiTexture,
+                new Vector2(position.X + 1f, position.Y - 4f),
+                new Rectangle(token.EmojiIndex * EmojiSize % ChatBox.emojiTexture.Width,
+                    token.EmojiIndex * EmojiSize / ChatBox.emojiTexture.Width * EmojiSize, EmojiSize, EmojiSize),
+                Color.White * msg.alpha, 0f, Vector2.Zero, EmojiScale, SpriteEffects.None, 0.99f);
+        }
+
+        private static List<RichTextToken> ParseMessage(ChatMessage instance, string? senderName, SpriteFont font)
+        {
+            List<RichTextToken> tokens = new();
+            int senderNameRemaining = senderName?.Length ?? 0;
+            // Name underline excludes the ": " separator (last 2 chars)
+            int underlineRemaining = Math.Max(0, senderNameRemaining - 2);
+
+            foreach (ChatSnippet snippet in instance.message)
+            {
                 if (snippet.emojiIndex != -1)
                 {
-                    // Draw emoji
-                    b.Draw(ChatBox.emojiTexture,
-                        new Vector2(x + xPositionSoFar + 1f, y + yPositionSoFar - 4f),
-                        new Rectangle(snippet.emojiIndex * 9 % ChatBox.emojiTexture.Width,
-                            snippet.emojiIndex * 9 / ChatBox.emojiTexture.Width * 9, 9, 9),
-                        Color.White * __instance.alpha, 0f, Vector2.Zero, 4f, SpriteEffects.None, 0.99f);
-
-                    // Emojis don't count towards character count for name bolding (names generally don't have emojis in this context? actually they can)
-                    // But formattedUserName just returns the string name. If emojis are in the name, they are part of the string? 
-                    // Stardew names are simple strings. The chat snippet splitting might separate them.
-                    // Assuming for now name is text. If name has emoji it's complicated.
+                    tokens.Add(new RichTextToken { IsEmoji = true, EmojiIndex = snippet.emojiIndex, Width = 40f });
                 }
                 else if (snippet.message != null)
                 {
                     if (snippet.message.Equals(Environment.NewLine))
                     {
-                        // Handle newline
-                        xPositionSoFar = 0f;
-                        yPositionSoFar += font.MeasureString("(").Y;
+                        tokens.Add(new RichTextToken { IsNewLine = true });
                     }
                     else
                     {
-                        // Logic to handle bolding part of the text
-                        // We need to know which part of this snippet is within 'senderNameLength'
-
-                        string currentText = snippet.message;
-                        bool snippetHasUrl = UrlRegex.IsMatch(currentText);
-
-                        if (snippetHasUrl)
-                        {
-                            // Fallback to URL logic, but we lose bolding for URLs (URLs in name? unlikely)
-                            // Ideally we mix both, but complexity rises.
-                            // Use the existing URL loop but add bolding check
-                            MatchCollection matches = UrlRegex.Matches(currentText);
-                            int lastIndex = 0;
-
-                            foreach (Match match in matches)
-                            {
-                                if (match.Index > lastIndex)
-                                {
-                                    string beforeUrl = currentText.Substring(lastIndex, match.Index - lastIndex);
-                                    DrawTextWithBold(b, font, beforeUrl, x + xPositionSoFar, y + yPositionSoFar,
-                                        __instance.color * __instance.alpha, charactersDrawnSoFar, senderNameLength);
-                                    xPositionSoFar += font.MeasureString(beforeUrl).X;
-                                    charactersDrawnSoFar += beforeUrl.Length;
-                                }
-
-                                string url = match.Value;
-                                Vector2 textSize = font.MeasureString(url);
-                                Vector2 position = new(x + xPositionSoFar, y + yPositionSoFar);
-                                Color urlColor = new Color(100, 149, 237) * __instance.alpha;
-
-                                // Draw URL (never bold)
-                                b.DrawString(font, url, position, urlColor, 0f, Vector2.Zero, 1f, SpriteEffects.None,
-                                    0.99f);
-
-                                Rectangle underline = new((int)position.X, (int)(position.Y + textSize.Y - 2),
-                                    (int)textSize.X, 1);
-                                b.Draw(Game1.staminaRect, underline, urlColor);
-
-                                ActiveUrlRegions.Add(new UrlRegion
-                                {
-                                    Url = url,
-                                    Bounds = new Rectangle((int)position.X, (int)position.Y, (int)textSize.X,
-                                        (int)textSize.Y),
-                                    Message = __instance
-                                });
-
-                                xPositionSoFar += textSize.X;
-                                charactersDrawnSoFar += url.Length;
-                                lastIndex = match.Index + match.Length;
-                            }
-
-                            if (lastIndex < currentText.Length)
-                            {
-                                string afterUrl = currentText[lastIndex..];
-                                DrawTextWithBold(b, font, afterUrl, x + xPositionSoFar, y + yPositionSoFar,
-                                    __instance.color * __instance.alpha, charactersDrawnSoFar, senderNameLength);
-                                xPositionSoFar += font.MeasureString(afterUrl).X;
-                                charactersDrawnSoFar += afterUrl.Length;
-                            }
-                        }
-                        else
-                        {
-                            // Normal text, potentially bold
-                            DrawTextWithBold(b, font, currentText, x + xPositionSoFar, y + yPositionSoFar,
-                                __instance.color * __instance.alpha, charactersDrawnSoFar, senderNameLength);
-                            xPositionSoFar +=
-                                snippet.myLength; // DrawTextWithBold doesn't return width, rely on snippet
-                            charactersDrawnSoFar += currentText.Length;
-                        }
+                        ProcessTextSnippet(tokens, snippet.message, font, ref senderNameRemaining, ref underlineRemaining);
                     }
                 }
-                else
-                {
-                    xPositionSoFar += snippet.myLength;
-                }
-
-                // Handle text wrapping
-                if (!(xPositionSoFar >= 888f)) continue;
-                xPositionSoFar = 0f;
-                yPositionSoFar += font.MeasureString("(").Y;
-                if (__instance.message.Count > i + 1 &&
-                    __instance.message[i + 1].message != null &&
-                    __instance.message[i + 1].message.Equals(Environment.NewLine))
-                    i++;
             }
-
-            return false; // Skip original method
+            return tokens;
         }
 
-        private static void DrawTextWithBold(SpriteBatch b, SpriteFont font, string text, float x, float y, Color color,
-            int startIndex, int boldLength)
+        private static void ProcessTextSnippet(List<RichTextToken> tokens, string text, SpriteFont font,
+            ref int senderRemaining, ref int underlineRemaining)
         {
-            Color darkerGray = new Color(180, 180, 180, 255);
-            if (startIndex >= boldLength)
-            {
-                // All normal
-                b.DrawString(font, text, new Vector2(x, y), color, 0f, Vector2.Zero, 1f, SpriteEffects.None, 0.99f);
-            }
-            else if (startIndex + text.Length <= boldLength)
-            {
-                // All bold (Title/Sender) - Use colored shadow for emphasis
-                Color shadowColor = Utility.MultiplyColor(color, darkerGray);
-                Utility.drawTextWithColoredShadow(b, text, font, new Vector2(x, y), color, shadowColor, 1.09375f, -.5f,
-                    2,
-                    2,
-                    3);
-            }
-            else
-            {
-                // Mixed
-                int splitIndex = boldLength - startIndex;
-                string boldPart = text.Substring(0, splitIndex);
-                string normalPart = text.Substring(splitIndex);
+            MatchCollection matches = UrlRegex.Matches(text);
+            int lastIndex = 0;
 
-                // Draw bold part
-                Color shadowColor = Utility.MultiplyColor(color, darkerGray);
-                Utility.drawTextWithColoredShadow(b, boldPart, font, new Vector2(x, y), color, shadowColor, 1.0625f,
-                    .99f,
-                    2, 2, 3);
+            foreach (Match match in matches)
+            {
+                if (match.Index > lastIndex)
+                {
+                    string segment = text.Substring(lastIndex, match.Index - lastIndex);
+                    AddStyledTextTokens(tokens, segment, font, ref senderRemaining, ref underlineRemaining);
+                }
 
-                // Draw normal part
-                float boldWidth = font.MeasureString(boldPart).X;
-                b.DrawString(font, normalPart, new Vector2(x + boldWidth, y), color, 0f, Vector2.Zero, 1f,
-                    SpriteEffects.None, 0.99f);
+                // URL
+                tokens.Add(new RichTextToken
+                {
+                    Text = match.Value,
+                    IsUrl = true,
+                    Width = font.MeasureString(match.Value).X
+                });
+
+                // Consume counts if URL is somehow part of the name (unlikely but safe)
+                if (senderRemaining > 0)
+                {
+                    senderRemaining -= match.Value.Length;
+                    underlineRemaining -= match.Value.Length;
+                }
+
+                lastIndex = match.Index + match.Length;
+            }
+
+            if (lastIndex < text.Length)
+            {
+                AddStyledTextTokens(tokens, text.Substring(lastIndex), font, ref senderRemaining, ref underlineRemaining);
+            }
+        }
+
+        private static void AddStyledTextTokens(List<RichTextToken> tokens, string text, SpriteFont font,
+            ref int boldRemaining, ref int underlineRemaining)
+        {
+            while (text.Length > 0)
+            {
+                bool isBold = boldRemaining > 0;
+                bool isUnderlined = underlineRemaining > 0;
+
+                int len = text.Length;
+                if (isBold && boldRemaining < len) len = boldRemaining;
+                if (isUnderlined && underlineRemaining < len) len = underlineRemaining;
+
+                string fragment = text.Substring(0, len);
+                tokens.Add(new RichTextToken
+                {
+                    Text = fragment,
+                    IsBold = isBold,
+                    IsUnderlined = isUnderlined,
+                    Width = font.MeasureString(fragment).X
+                });
+
+                text = text.Substring(len);
+                if (isBold) boldRemaining -= len;
+                if (isUnderlined) underlineRemaining -= len;
             }
         }
     }
 
     #endregion
 
-    #region URL Clicking
+    #region Interaction (Update & Cursor)
 
-    /// <summary>
-    ///     Patch to handle clicks on URLs - only triggers on initial mouse press
-    /// </summary>
     [HarmonyPatch(typeof(ChatBox), "update")]
-    public class UpdatePatch
+    public sealed class UpdatePatch
     {
         private static void Postfix(ChatBox __instance)
         {
-            // Check config for whether to allow clicking when chat is closed
             bool canClick = __instance.chatBox.Selected ||
                             (ModEntry.Instance?.Config.AllowUrlClickWhenChatClosed ?? true);
 
@@ -346,49 +391,46 @@ internal class ChatUrlPatches
             MouseState mouseState = Game1.input.GetMouseState();
             bool isMousePressed = mouseState.LeftButton == ButtonState.Pressed;
 
-            // Only trigger on the initial press (transition from not pressed to pressed)
             if (isMousePressed && !_wasMousePressed)
             {
-                Point mousePos = Game1.getMousePosition();
-                int x = (int)(mousePos.X / Game1.options.zoomLevel);
-                int y = (int)(mousePos.Y / Game1.options.zoomLevel);
-
-                // Check if click is on any URL
-                foreach (UrlRegion urlRegion in ActiveUrlRegions.Where(urlRegion => urlRegion.Bounds.Contains(x, y)))
-                {
-                    OpenUrl(urlRegion.Url);
-                    Game1.playSound("drumkit6"); // Play a click sound
-                    break;
-                }
+                HandleClick();
             }
 
             _wasMousePressed = isMousePressed;
 
-            // Clean up old messages from cache periodically
-            if (Game1.ticks % 60 == 0) // Every second
+            // Cleanup cache periodically
+            if (Game1.ticks % 60 == 0)
                 CleanupOldMessages(__instance);
+        }
+
+        private static void HandleClick()
+        {
+            Point mousePos = Game1.getMousePosition();
+            int x = (int)(mousePos.X / Game1.options.zoomLevel);
+            int y = (int)(mousePos.Y / Game1.options.zoomLevel);
+
+            foreach (var region in ActiveUrlRegions.Where(r => r.Bounds.Contains(x, y)))
+            {
+                OpenUrl(region.Url);
+                Game1.playSound("drumkit6");
+                break;
+            }
         }
 
         private static void CleanupOldMessages(ChatBox chatBox)
         {
-            // Use reflection to access private messages field
             FieldInfo? messagesField = AccessTools.Field(typeof(ChatBox), "messages");
-            if (messagesField == null) return;
-            if (messagesField.GetValue(chatBox) is not List<ChatMessage> messages) return;
-            MessagesWithUrls.RemoveWhere(msg => !messages.Contains(msg));
-            ActiveUrlRegions.RemoveAll(region => !messages.Contains(region.Message));
+            if (messagesField?.GetValue(chatBox) is not List<ChatMessage> messages) return;
+
+            ActiveUrlRegions.RemoveAll(region => region.Message != null && !messages.Contains(region.Message));
         }
     }
 
-    /// <summary>
-    ///     Patch to show pointer cursor when hovering over URLs
-    /// </summary>
     [HarmonyPatch(typeof(ChatBox), "draw")]
-    public class DrawPatch
+    public sealed class DrawCursorPatch
     {
-        private static void Postfix(ChatBox __instance, SpriteBatch b)
+        private static void Postfix(ChatBox __instance)
         {
-            // Check config for whether to show cursor when chat is closed
             bool canInteract = __instance.chatBox.Selected ||
                                (ModEntry.Instance?.Config.AllowUrlClickWhenChatClosed ?? true);
 
@@ -398,49 +440,12 @@ internal class ChatUrlPatches
             int x = (int)(mousePos.X / Game1.options.zoomLevel);
             int y = (int)(mousePos.Y / Game1.options.zoomLevel);
 
-            // Check if hovering over any URL
-            if (!ActiveUrlRegions.Any(urlRegion => urlRegion.Bounds.Contains(x, y))) return;
-            Game1.mouseCursor = Game1.cursor_gamepad_pointer;
-        }
-    }
-
-    //Thinking we will need to override the bottom part, changing 888 to 864 or
-    /* Base code from decompiled source:
-    public void draw(SpriteBatch b, int x, int y)
-    {
-        float xPositionSoFar = 0f;
-        float yPositionSoFar = 0f;
-        for (int i = 0; i < message.Count; i++)
-        {
-            if (message[i].emojiIndex != -1)
+            if (ActiveUrlRegions.Any(r => r.Bounds.Contains(x, y)))
             {
-                b.Draw(ChatBox.emojiTexture, new Vector2((float)x + xPositionSoFar + 1f, (float)y + yPositionSoFar - 4f), new Rectangle(message[i].emojiIndex * 9 % ChatBox.emojiTexture.Width, message[i].emojiIndex * 9 / ChatBox.emojiTexture.Width * 9, 9, 9), Color.White * alpha, 0f, Vector2.Zero, 4f, SpriteEffects.None, 0.99f);
-            }
-            else if (message[i].message != null)
-            {
-                if (message[i].message.Equals(Environment.NewLine))
-                {
-                    xPositionSoFar = 0f;
-                    yPositionSoFar += ChatBox.messageFont(language).MeasureString("(").Y;
-                }
-                else
-                {
-                    b.DrawString(ChatBox.messageFont(language), message[i].message, new Vector2((float)x + xPositionSoFar, (float)y + yPositionSoFar), color * alpha, 0f, Vector2.Zero, 1f, SpriteEffects.None, 0.99f);
-                }
-            }
-            xPositionSoFar += message[i].myLength;
-            if (xPositionSoFar >= 888f)
-            {
-                xPositionSoFar = 0f;
-                yPositionSoFar += ChatBox.messageFont(language).MeasureString("(").Y;
-                if (message.Count > i + 1 && message[i + 1].message != null && message[i + 1].message.Equals(Environment.NewLine))
-                {
-                    i++;
-                }
+                Game1.mouseCursor = Game1.cursor_gamepad_pointer;
             }
         }
     }
-    */
 
     #endregion
 }
