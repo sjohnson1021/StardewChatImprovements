@@ -7,6 +7,16 @@ namespace ChatImprovements;
 /// Configuration options for the Chat Improvements mod.
 /// All settings can be modified in-game via Generic Mod Config Menu.
 /// </summary>
+/// <summary>What happens when the player clicks a link in chat.</summary>
+public enum LinkClickAction
+{
+    /// <summary>Copy the link to the clipboard. The default, because it cannot be abused.</summary>
+    Copy,
+
+    /// <summary>Open the link in the player's default browser.</summary>
+    Open
+}
+
 public sealed class ModConfig
 {
     #region Default Value Constants
@@ -71,6 +81,14 @@ public sealed class ModConfig
     ///     box closed also performs the normal game action underneath it.
     /// </remarks>
     public bool AllowUrlClickWhenChatClosed { get; set; }
+
+    /// <summary>What clicking a link does.</summary>
+    /// <remarks>
+    ///     Copying is the default. Links in chat come from other players, and opening one
+    ///     straight into a browser on a single click is not something the player opted into.
+    ///     Copying lets them look before they go.
+    /// </remarks>
+    public LinkClickAction LinkClickBehavior { get; set; } = LinkClickAction.Copy;
 
     #endregion
 

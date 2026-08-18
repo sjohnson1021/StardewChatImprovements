@@ -13,7 +13,8 @@ Initial public release.
 - Ctrl+Left/Right to jump by word, Ctrl+Backspace/Delete to delete by word.
 - The chat box scrolls horizontally instead of stopping at the edge.
 - A colour button to pick the colour your messages send in, previewed as you type.
-- Links in chat are highlighted and open in your browser when clicked.
+- Links in chat are highlighted; clicking one copies it to the clipboard by
+  default, or opens it in the browser if you switch `LinkClickBehavior`.
 - Cursor movement and deletion work on grapheme clusters, so combining marks,
   Korean jamo and multi-codepoint emoji are treated as single characters.
 - Text is measured with the same font it is drawn with, keeping the caret aligned

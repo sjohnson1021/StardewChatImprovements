@@ -36,8 +36,9 @@ delete by word.
 colour your messages are sent in, and your text previews in that colour as you
 type.
 
-**Clickable links.** URLs in chat are highlighted and underlined, and open in
-your default browser when clicked.
+**Clickable links.** URLs in chat are highlighted and underlined. Clicking one
+copies it to your clipboard by default, or opens it in your browser if you
+prefer — links come from other players, so the safe option is the default.
 
 **Emoji-aware.** The cursor treats an emoji as a single character, so arrow keys
 step over it and backspace removes the whole thing rather than half a tag.
@@ -81,14 +82,22 @@ mod. With Generic Mod Config Menu installed you can change them in-game instead.
 | `PasteKeybind`                | `LeftControl + V` | Paste from the clipboard.                                     |
 | `UndoKeybind`                 | `LeftControl + Z` | Undo the last change.                                         |
 | `RedoKeybind`                 | `LeftControl + Y` | Redo the last undone change.                                  |
+| `LinkClickBehavior`           | `Copy`            | What clicking a link does: `Copy` or `Open`. See below.        |
 | `AllowUrlClickWhenChatClosed` | `false`           | Also allow clicking links with chat closed. See below.        |
 
-### About `AllowUrlClickWhenChatClosed`
+### About the link settings
 
-This is off by default on purpose. The mod does not consume the click, so
-clicking a link while the chat box is closed *also* performs the normal game
-action underneath it — swinging your tool, for example. Turn it on if you would
-rather have links always clickable and don't mind that.
+Both default to the cautious option, because links in chat come from other
+players rather than from you.
+
+`LinkClickBehavior` is **`Copy`** by default: clicking a link copies it to your
+clipboard and tells you so, rather than launching a browser. You can look at the
+address before deciding to visit it. Set it to `Open` if you'd rather click
+straight through — reasonable if you only play with people you know.
+
+`AllowUrlClickWhenChatClosed` is **off** by default because the mod does not
+consume the click, so clicking a link while the chat box is closed *also*
+performs the normal game action underneath it — swinging your tool, for example.
 
 ## Compatibility
 

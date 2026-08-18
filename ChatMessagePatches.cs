@@ -69,6 +69,24 @@ internal class ChatMessagePatches
 
     #region Helpers
 
+    /// <summary>Acts on a clicked link according to <see cref="ModConfig.LinkClickBehavior" />.</summary>
+    private static void ActivateLink(string url)
+    {
+        ITranslationHelper? t = ModEntry.Instance?.Helper.Translation;
+
+        if ((ModEntry.Instance?.Config.LinkClickBehavior ?? LinkClickAction.Copy) == LinkClickAction.Open)
+        {
+            OpenUrl(url);
+            Game1.playSound("drumkit6");
+            return;
+        }
+
+        ClipboardHelper.SetText(url);
+        Game1.playSound("drumkit6");
+        Game1.addHUDMessage(new HUDMessage(t?.Get("hud.linkCopied") ?? "Link copied to clipboard",
+            HUDMessage.newQuest_type));
+    }
+
     private static void OpenUrl(string url)
     {
         try
@@ -411,14 +429,14 @@ internal class ChatMessagePatches
 
         private static void HandleClick()
         {
-            Point mousePos = Game1.getMousePosition();
-            int x = (int)(mousePos.X / Game1.options.zoomLevel);
-            int y = (int)(mousePos.Y / Game1.options.zoomLevel);
+            // URL bounds are recorded in UI space, so hit-test in UI space too.
+            // getMousePosition() already divides by uiScale; dividing again by zoomLevel
+            // double-scales the point and the hit test never matches.
+            Point mousePos = Game1.getMousePosition(ui_scale: true);
 
-            foreach (var region in ActiveUrlRegions.Where(r => r.Bounds.Contains(x, y)))
+            foreach (UrlRegion region in ActiveUrlRegions.Where(r => r.Bounds.Contains(mousePos)))
             {
-                OpenUrl(region.Url);
-                Game1.playSound("drumkit6");
+                ActivateLink(region.Url);
                 break;
             }
         }
@@ -442,11 +460,9 @@ internal class ChatMessagePatches
 
             if (!canInteract) return;
 
-            Point mousePos = Game1.getMousePosition();
-            int x = (int)(mousePos.X / Game1.options.zoomLevel);
-            int y = (int)(mousePos.Y / Game1.options.zoomLevel);
+            Point mousePos = Game1.getMousePosition(ui_scale: true);
 
-            if (ActiveUrlRegions.Any(r => r.Bounds.Contains(x, y)))
+            if (ActiveUrlRegions.Any(r => r.Bounds.Contains(mousePos)))
             {
                 Game1.mouseCursor = Game1.cursor_gamepad_pointer;
             }

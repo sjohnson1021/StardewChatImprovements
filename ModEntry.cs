@@ -180,6 +180,19 @@ public sealed class ModEntry : Mod
             getValue: () => Config.AllowUrlClickWhenChatClosed,
             setValue: value => Config.AllowUrlClickWhenChatClosed = value
         );
+
+        api.AddTextOption(
+            manifest: ModManifest,
+            name: () => t.Get("config.linkClickBehavior.name"),
+            tooltip: () => t.Get("config.linkClickBehavior.tooltip"),
+            getValue: () => Config.LinkClickBehavior.ToString(),
+            setValue: value => Config.LinkClickBehavior =
+                Enum.TryParse(value, out LinkClickAction parsed) ? parsed : LinkClickAction.Copy,
+            allowedValues: new[] { nameof(LinkClickAction.Copy), nameof(LinkClickAction.Open) },
+            formatAllowedValue: value => value == nameof(LinkClickAction.Open)
+                ? t.Get("config.linkClickBehavior.open")
+                : t.Get("config.linkClickBehavior.copy")
+        );
     }
 
     /// <summary>

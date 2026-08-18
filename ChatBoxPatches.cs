@@ -269,39 +269,43 @@ internal class ChatBoxScrollPatches
                 b.GraphicsDevice.ScissorRectangle = scissor;
                 b.Begin(SpriteSortMode.Deferred, BlendState.AlphaBlend, SamplerState.PointClamp, null, raster);
 
-                // Draw messages using the same logic as the original game
-                // Start from yPositionOnScreen and accumulate height going UP
-                float heightSoFar = -state.ScrollOffset; // Apply scroll offset
-
-                for (int i = messages.Count - 1; i >= 0; i--)
+                try
                 {
-                    ChatMessage message = messages[i];
+                    // Draw messages using the same logic as the original game:
+                    // start from yPositionOnScreen and accumulate height going UP.
+                    float heightSoFar = -state.ScrollOffset; // Apply scroll offset
 
-                    heightSoFar += message.verticalSize;
-
-                    // Calculate Y position (same as original: y - heightSoFar - 8)
-                    // Calculate Y position (same as original: y - heightSoFar - 8)
-                    int drawY = __instance.yPositionOnScreen - (int)heightSoFar - 8;
-
-                    // Check if message is visible in clipping region
-                    int messageTop = drawY;
-                    int messageBottom = drawY + message.verticalSize;
-
-                    if (messageBottom >= scissor.Y - 10 && messageTop <= scissor.Y + scissor.Height + 10)
+                    for (int i = messages.Count - 1; i >= 0; i--)
                     {
-                        message.draw(b, __instance.xPositionOnScreen + 12, drawY);
+                        ChatMessage message = messages[i];
+
+                        heightSoFar += message.verticalSize;
+                        int drawY = __instance.yPositionOnScreen - (int)heightSoFar - 8;
+
+                        // Skip messages outside the clipping region
+                        int messageTop = drawY;
+                        int messageBottom = drawY + message.verticalSize;
+
+                        if (messageBottom >= scissor.Y - 10 && messageTop <= scissor.Y + scissor.Height + 10)
+                        {
+                            message.draw(b, __instance.xPositionOnScreen + 12, drawY);
+                        }
+                    }
+
+                    // Draw scroll indicator
+                    if (totalHeight > visibleHeight)
+                    {
+                        DrawScrollIndicator(b, __instance, state, totalHeight, visibleHeight, displayHeight);
                     }
                 }
-
-                // Draw scroll indicator
-                if (totalHeight > visibleHeight)
+                finally
                 {
-                    DrawScrollIndicator(b, __instance, state, totalHeight, visibleHeight, displayHeight);
+                    // Must run even if drawing throws: leaving the batch unbalanced makes the
+                    // next Begin() fail and the game cannot recover from it.
+                    b.End();
+                    b.GraphicsDevice.ScissorRectangle = oldScissor;
+                    b.Begin(SpriteSortMode.Deferred, BlendState.AlphaBlend, SamplerState.PointClamp, null, oldRaster);
                 }
-
-                b.End();
-                b.GraphicsDevice.ScissorRectangle = oldScissor;
-                b.Begin(SpriteSortMode.Deferred, BlendState.AlphaBlend, SamplerState.PointClamp, null, oldRaster);
 
                 DrawChatBoxChrome(__instance, b);
             }

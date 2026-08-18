@@ -159,6 +159,11 @@ internal class ChatTextBoxPatches
     /// </summary>
     private static int CalculateCursorFromClick(ChatBox chatBox, int x, TextBoxState s)
     {
+        return Math.Clamp(CalculateCursorFromClickCore(chatBox, x, s), 0, s.FullText.Length);
+    }
+
+    private static int CalculateCursorFromClickCore(ChatBox chatBox, int x, TextBoxState s)
+    {
         float clickX = x - chatBox.chatBox.X - TextBoxPadding + s.ScrollOffset;
         // language must be set BEFORE parsing: ChatSnippet measures itself with
         // messageFont(language), and the default (en) has different metrics to the
@@ -217,7 +222,10 @@ internal class ChatTextBoxPatches
         // Choose closer between i and i-1
         float wi = i == 0 ? 0f : font.MeasureString(text.Substring(0, i)).X;
         float wim1 = i <= 1 ? 0f : font.MeasureString(text.Substring(0, i - 1)).X;
-        return (wi - targetWidth) <= (targetWidth - wim1) ? i : i - 1;
+        // Dragging left of the text start gives a negative targetWidth, which would pick
+        // i - 1 == -1 and produce a negative cursor index downstream.
+        int closest = (wi - targetWidth) <= (targetWidth - wim1) ? i : i - 1;
+        return Math.Clamp(closest, 0, text.Length);
     }
 
     private static void InsertText(ChatTextBox box, string text)
@@ -739,16 +747,23 @@ internal class ChatTextBoxPatches
             UpdateScrollOffset(s, cursorPixel, visibleWidth, totalWidth);
 
             var (oldScissor, oldRaster) = BeginClippedRendering(spriteBatch, __instance);
+            try
+            {
+                if (s.SelectionStart != s.SelectionEnd)
+                    DrawSelectionHighlight(spriteBatch, s, font, __instance);
 
-            if (s.SelectionStart != s.SelectionEnd)
-                DrawSelectionHighlight(spriteBatch, s, font, __instance);
+                DrawTextContent(spriteBatch, msg.message, __instance, s, font, textColor);
 
-            DrawTextContent(spriteBatch, msg.message, __instance, s, font, textColor);
+                if (showCursor && __instance.Selected)
+                    DrawCursor(spriteBatch, __instance, cursorPixel, s.ScrollOffset, cursorColor);
+            }
+            finally
+            {
+                // Must run even if drawing throws: leaving the batch unbalanced makes the
+                // next Begin() fail and the game cannot recover from it.
+                EndClippedRendering(spriteBatch, oldScissor, oldRaster);
+            }
 
-            if (showCursor && __instance.Selected)
-                DrawCursor(spriteBatch, __instance, cursorPixel, s.ScrollOffset, cursorColor);
-
-            EndClippedRendering(spriteBatch, oldScissor, oldRaster);
             return false;
         }
 
@@ -794,7 +809,8 @@ internal class ChatTextBoxPatches
                     }
                     else
                     {
-                        px += font.MeasureString(snippet.message[..(cursorIndex - count)]).X;
+                        int take = Math.Clamp(cursorIndex - count, 0, snippet.message.Length);
+                        px += font.MeasureString(snippet.message[..take]).X;
                         break;
                     }
                 }
