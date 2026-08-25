@@ -128,6 +128,12 @@ Every player-facing string lives in `i18n/`. See
 [TRANSLATING.md](TRANSLATING.md) — translation pull requests are very welcome,
 and partial translations are fine because SMAPI falls back to English per key.
 
+## Translations
+
+This mod has been translated by the following contributors:
+
+- **Chinese (Simplified)** — @BlackRosePetals ([#2](https://github.com/sjohnson1021/StardewChatImprovements/pull/2))
+
 ## Building from source
 
 The mod compiles against Stardew Valley's own assemblies, so you need the game
