@@ -75,15 +75,19 @@ Two link settings default to the cautious option, because links in chat come fro
 [*][b]Clicking links while the chat box is closed[/b] is [b]off[/b] — the mod doesn't swallow the click, so it would also swing your tool.
 [/list]
 
+[b]Split long messages[/b] decides what happens when you send something longer than a player without the mod can draw. It defaults to [b]only when someone lacks the mod[/b], so your messages go out whole unless splitting them is actually needed. A split message arrives as several messages for everyone, because the game sends one message the same way to every player.
+
 [line]
 
 [size=4]Compatibility[/size]
 
 [list]
 [*]Stardew Valley 1.6+, SMAPI 4.0.0+
-[*]Single player and multiplayer. This is client-side — other players don't need it, and they'll see your longer messages normally.
+[*]Single player and multiplayer. This is client-side and other players don't need it, though a player without it can't draw a longer-than-vanilla message correctly — see [b]Split long messages[/b] above.
 [*]Windows, macOS and Linux.
-[*][b]Will likely conflict[/b] with other mods that change how the chat box draws or handles input.
+[*][b]Item Chat Link[/b] — supported. Messages carrying an item link are left for it to draw, so its tooltips keep working; those messages don't get this mod's link colouring or bold sender name.
+[*][b]Chat Time[/b] — supported. Its timestamp stays on chat messages instead of leaking into the line you're typing.
+[*]The drawing patches run last, so a mod that only watches the chat being drawn still gets to. A mod that takes drawing over itself [b]will conflict[/b].
 [/list]
 
 [line]

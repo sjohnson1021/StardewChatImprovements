@@ -17,6 +17,19 @@ public enum LinkClickAction
     Open
 }
 
+/// <summary>When a message too long for a vanilla client is broken into several messages.</summary>
+public enum VanillaSplitMode
+{
+    /// <summary>Split only while a connected player does not have this mod. The default.</summary>
+    Auto,
+
+    /// <summary>Always split messages that would wrap on a vanilla client.</summary>
+    Always,
+
+    /// <summary>Never split. Long messages overlap on the screen of anyone without this mod.</summary>
+    Never
+}
+
 public sealed class ModConfig
 {
     #region Default Value Constants
@@ -81,6 +94,22 @@ public sealed class ModConfig
     ///     box closed also performs the normal game action underneath it.
     /// </remarks>
     public bool AllowUrlClickWhenChatClosed { get; set; }
+
+    /// <summary>
+    /// Whether to break a message too long for a vanilla client into several shorter ones
+    /// before sending it.
+    /// </summary>
+    /// <remarks>
+    ///     A client without this mod measures a message's height from one text wrap and draws it
+    ///     with another. They agree for anything vanilla-length, because it never wraps, and
+    ///     disagree once it does -- the drawn text is taller than the space reserved for it and
+    ///     runs over the messages around it. That client cannot be patched, so the only place to
+    ///     fix it is here, before the message is sent.
+    ///
+    ///     Defaults to <see cref="VanillaSplitMode.Auto" />: nobody pays for the split until
+    ///     someone is connected who needs it.
+    /// </remarks>
+    public VanillaSplitMode SplitLongMessages { get; set; } = VanillaSplitMode.Auto;
 
     /// <summary>What clicking a link does.</summary>
     /// <remarks>

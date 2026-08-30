@@ -83,6 +83,7 @@ mod. With Generic Mod Config Menu installed you can change them in-game instead.
 | ----------------------------- | ----------------- | ------------------------------------------------------------- |
 | `MaxMessageLength`            | `500`             | Character limit per message (100–1000).                       |
 | `MaxChatHistory`              | `100`             | Messages kept for scrollback (10–500).                        |
+| `SplitLongMessages`           | `Auto`            | Split long messages for players without the mod. See below.   |
 | `EnableHorizontalScrolling`   | `true`            | Scroll sideways while typing instead of stopping at the edge. |
 | `EnableCursorControl`         | `true`            | Arrow keys, Home/End, selection and key repeat.               |
 | `EnableMessageColorButton`    | `true`            | Show the message colour button next to the chat box.          |
@@ -96,6 +97,34 @@ mod. With Generic Mod Config Menu installed you can change them in-game instead.
 | `RedoKeybind`                 | `LeftControl + Y` | Redo the last undone change.                                  |
 | `LinkClickBehavior`           | `Copy`            | What clicking a link does: `Copy` or `Open`. See below.        |
 | `AllowUrlClickWhenChatClosed` | `false`           | Also allow clicking links with chat closed. See below.        |
+
+### About `SplitLongMessages`
+
+A player without this mod works out how tall your message is with one text-wrap
+pass and then draws it with a different one. The two agree on anything of vanilla
+length, because it never wraps — and disagree once it does, so a long message is
+drawn taller than the space reserved for it and covers the messages around it.
+Nothing can be patched on their side, so the only place to fix it is before the
+message is sent.
+
+- **`Auto`** (default) — split only while someone is connected who doesn't have
+  the mod. On your own, or in a group where everyone has it, messages are sent
+  whole.
+- **`Always`** — always split. Use this if you'd rather not think about who is
+  connected.
+- **`Never`** — never split. Your messages stay in one piece and overlap on the
+  screen of anyone without the mod.
+
+Messages are split only once they would wrap past three lines on such a client,
+so a long message becomes two or three messages rather than one per line.
+Anything shorter is sent untouched.
+
+A message is sent to every player the same way, so a split message arrives as
+several messages **for everyone**, not only for the players who need it that way.
+The game gives no way around this: a chat message addressed to one player is
+delivered as a private message and rendered as a whisper, so the split cannot be
+applied per-recipient. `Auto` therefore decides *whether anyone needs* the split,
+not *who receives* it.
 
 ### About the link settings
 
@@ -114,11 +143,20 @@ performs the normal game action underneath it — swinging your tool, for exampl
 ## Compatibility
 
 - **Stardew Valley 1.6+**, SMAPI 4.0.0+, single player and multiplayer.
-- **Multiplayer:** this is client-side. Other players don't need it, and they see
-  your longer messages normally.
+- **Multiplayer:** this is client-side, and other players don't need it. A player
+  without it cannot draw a longer-than-vanilla message correctly, so by default
+  those messages are split into vanilla-sized ones while such a player is
+  connected. See [`SplitLongMessages`](#about-splitlongmessages).
+- **Item Chat Link** (`juhyu.ItemChatLink`): supported. Messages carrying an item
+  link are left for Item Chat Link to draw, so its tooltips keep working; those
+  messages don't get this mod's link colouring or bold sender name.
+- **Chat Time:** supported. The text box no longer borrows the game's message
+  parser, so Chat Time's timestamp stays on chat messages instead of leaking into
+  the line you are typing.
 - **Other chat mods:** this Harmony-patches `ChatBox`, `ChatTextBox` and
-  `ChatMessage`, so it will likely conflict with any other mod that changes how
-  the chat box draws or handles input.
+  `ChatMessage`. Its drawing patches run last, so a mod that only watches the
+  chat being drawn still gets to. A mod that takes drawing over itself will
+  conflict.
 - **Linux:** the clipboard uses `wl-copy` / `wl-paste` on Wayland where
   available, and falls back to SDL2 otherwise.
 
