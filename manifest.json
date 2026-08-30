@@ -1,7 +1,7 @@
 {
   "Name": "Chat Improvements",
   "Author": "Sean Johnson",
-  "Version": "1.0.0",
+  "Version": "1.1.0",
   "Description": "A better chat box: longer messages, scrollback, full cursor and selection control, undo, copy/paste, message colours and clickable links.",
   "UniqueID": "sjohnson1021.ChatImprovements",
   "EntryDll": "ChatImprovements.dll",

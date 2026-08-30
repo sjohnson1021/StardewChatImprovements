@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Globalization;
+using System.Text;
 using HarmonyLib;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
@@ -176,18 +177,18 @@ internal class ChatTextBoxPatches
     private static int CalculateCursorFromClickCore(ChatBox chatBox, int x, TextBoxState s)
     {
         float clickX = x - chatBox.chatBox.X - TextBoxPadding + s.ScrollOffset;
-        // language must be set BEFORE parsing: ChatSnippet measures itself with
+        // The language must be passed in: ChatSnippet measures itself with
         // messageFont(language), and the default (en) has different metrics to the
         // font this text is actually drawn with in ja/ko/zh/ru.
-        ChatMessage msg = new() { language = LocalizedContentManager.CurrentLanguageCode };
-        msg.parseMessageForEmoji(s.FullText);
+        List<ChatSnippet> snippets =
+            TextHelper.ParseSnippets(s.FullText, LocalizedContentManager.CurrentLanguageCode);
         SpriteFont? font = ChatBox.messageFont(LocalizedContentManager.CurrentLanguageCode);
         if (font == null) return s.FullText.Length;
 
         float currentX = 0f;
         int charCount = 0;
 
-        foreach (ChatSnippet snippet in msg.message)
+        foreach (ChatSnippet snippet in snippets)
         {
             if (snippet.emojiIndex != -1)
             {
@@ -237,6 +238,37 @@ internal class ChatTextBoxPatches
         // i - 1 == -1 and produce a negative cursor index downstream.
         int closest = (wi - targetWidth) <= (targetWidth - wim1) ? i : i - 1;
         return Math.Clamp(closest, 0, text.Length);
+    }
+
+    /// <summary>Flattens pasted text into something a single-line chat box can hold.</summary>
+    /// <remarks>
+    ///     An interior line break used to survive into the sent message, where it forces a wrap.
+    ///     On a client without this mod that is the overlap case exactly: the message's height is
+    ///     reserved from one wrap pass and its text drawn with another, so it covers whatever is
+    ///     around it. Only trailing breaks were trimmed before.
+    /// </remarks>
+    private static string NormalizePaste(string? text)
+    {
+        if (string.IsNullOrEmpty(text)) return "";
+
+        StringBuilder sb = new(text.Length);
+        bool lastWasBreak = false;
+
+        foreach (char c in text)
+        {
+            if (c == '\r' || c == '\n')
+            {
+                // A CRLF pair, or a blank line, collapses to a single space.
+                if (!lastWasBreak) sb.Append(' ');
+                lastWasBreak = true;
+                continue;
+            }
+
+            sb.Append(c);
+            lastWasBreak = false;
+        }
+
+        return sb.ToString().Trim();
     }
 
     private static void InsertText(ChatTextBox box, string text)
@@ -293,11 +325,25 @@ internal class ChatTextBoxPatches
         RebuildText(box, s);
     }
 
-    private static void RebuildText(ChatTextBox box, TextBoxState s)
+    private static readonly AccessTools.FieldRef<TextBox, string> _plainText =
+        AccessTools.FieldRefAccess<TextBox, string>("_text");
+
+    /// <summary>Rewrites the box's own state from this mod's copy of the text.</summary>
+    /// <param name="syncPlainText">
+    ///     Whether to mirror the text into <see cref="TextBox.Text" />. Set through the backing
+    ///     field, because the property setter truncates anything wider than the box -- the exact
+    ///     limit this mod exists to lift. Other mods read that property to find out what is in
+    ///     the chat input; Item Chat Link appends its item link to it, so leaving it empty made
+    ///     an F8 insert throw away whatever the player had typed.
+    /// </param>
+    private static void RebuildText(ChatTextBox box, TextBoxState s, bool syncPlainText = true)
     {
         box.finalText.Clear();
         box.finalText.Add(new ChatSnippet(s.FullText, LocalizedContentManager.CurrentLanguageCode));
         box.updateWidth();
+
+        if (syncPlainText)
+            _plainText(box) = s.FullText;
     }
 
     private static void UpdateSelection(TextBoxState s, int newCursor, bool shift)
@@ -363,6 +409,64 @@ internal class ChatTextBoxPatches
             if (!__instance.Selected) return true;
 
             InsertText(__instance, text);
+            return false;
+        }
+    }
+
+    /// <summary>
+    ///     <see cref="ChatTextBox.setText" /> replaces the whole input. Handle it as a replace,
+    ///     except when it is the chat box emptying itself.
+    /// </summary>
+    /// <remarks>
+    ///     Vanilla implements setText as <c>reset()</c> followed by <c>RecieveTextInput</c>, and
+    ///     this mod's prefix on the latter inserts at the caret. The reset only clears the box's
+    ///     own snippet list, not this mod's copy of the text, so the old contents survived and
+    ///     every call appended to them. Item Chat Link inserts a link by calling setText with
+    ///     "everything so far, plus the new link", so each F8 re-added everything already there:
+    ///     a third insert produced "[Axe][Axe] [Watering Can][Axe] [Watering Can] [Small Plant]".
+    ///
+    ///     An empty call is a different thing entirely. <c>activate()</c> and <c>clickAway()</c>
+    ///     both use it to blank the box as it opens and closes, and keeping the draft through
+    ///     that is a feature of this mod -- closing chat to deal with something attacking you
+    ///     should not throw away a long message. Those calls are ignored outright, including
+    ///     vanilla's half, so the snippet list survives too and the draft can still be sent
+    ///     after reopening. Sending is what clears the box, and that runs through textBoxEnter.
+    ///
+    ///     A call that is the current text plus something on the end is treated as an insertion
+    ///     rather than a replacement. That is the only way a mod can express "add this" through
+    ///     an API that only replaces, and taking it literally would append at the end and drag
+    ///     the caret with it -- so a link inserted while the caret sat mid-sentence landed in the
+    ///     wrong place. The added part goes in at the caret instead, and the caret follows it.
+    /// </remarks>
+    [HarmonyPatch(typeof(ChatTextBox), nameof(ChatTextBox.setText))]
+    public class SetTextPatch
+    {
+        private static bool Prefix(ChatTextBox __instance, string text)
+        {
+            if (string.IsNullOrEmpty(text))
+                return false;
+
+            TextBoxState s = GetState(__instance);
+
+            // "Everything already there, plus this" means insert, not replace. InsertText keeps
+            // the caret where the player left it, snapshots for undo, and honours the message
+            // length limit.
+            if (s.FullText.Length > 0
+                && text.Length > s.FullText.Length
+                && text.StartsWith(s.FullText, StringComparison.Ordinal))
+            {
+                InsertText(__instance, text.Substring(s.FullText.Length));
+                return false;
+            }
+
+            // Snapshot first, so replacing the draft stays undoable.
+            MaybeSnapshot(s, OperationType.Paste, true);
+
+            s.FullText = text;
+            s.CursorIndex = s.SelectionStart = s.SelectionEnd = text.Length;
+            s.ScrollOffset = 0;
+
+            RebuildText(__instance, s);
             return false;
         }
     }
@@ -589,7 +693,7 @@ internal class ChatTextBoxPatches
             if (ModEntry.Instance.Config.PasteKeybind.JustPressed())
             {
                 MaybeSnapshot(s, OperationType.Paste, true);
-            string paste = ClipboardHelper.GetText()?.TrimEnd('\r', '\n') ?? "";
+            string paste = NormalizePaste(ClipboardHelper.GetText());
             if (!string.IsNullOrEmpty(paste)) //Need to test this on windows to see if our 'ghost-pasting' is present (paste being handled by something else)
                 InsertText(__instance.chatBox, paste);
             return false;
@@ -725,6 +829,146 @@ internal class ChatTextBoxPatches
         }
     }
 
+    /// <summary>
+    ///     Breaks a message longer than a vanilla client can draw into vanilla-sized messages
+    ///     before it is sent.
+    /// </summary>
+    /// <remarks>
+    ///     Patches the string overload, which is where the message actually goes out, so the
+    ///     text box still resets and closes exactly the way it normally does.
+    /// </remarks>
+    [HarmonyPatch(typeof(ChatBox), nameof(ChatBox.textBoxEnter), typeof(string))]
+    public class SendLongMessagePatch
+    {
+        /// <summary>Vanilla wraps for height at the chat box width less this padding.</summary>
+        private const int VanillaWrapPadding = 16;
+
+        /// <summary>
+        ///     Wrapped lines a message may occupy before a vanilla client draws it over its
+        ///     neighbour.
+        /// </summary>
+        /// <remarks>
+        ///     Measured on real clients, not derived. Two attempts to compute this from the
+        ///     font's own metrics both disagreed with what the game does -- one predicted a
+        ///     single line, the other five -- so this is simply the largest count observed to
+        ///     render without overlap. Five was watched to overlap; three was watched to be fine.
+        ///
+        ///     Established against the Latin chat font, then checked in Chinese, where the
+        ///     drift is smaller still -- three lines is comfortably inside the safe range there
+        ///     rather than at the edge of it. Erring low costs an extra message now and then;
+        ///     erring high puts a message over the top of its neighbour, so treat this as a
+        ///     ceiling to lower rather than one to raise.
+        /// </remarks>
+        private const int MaxVanillaLines = 3;
+
+        /// <summary>Set while the pieces are going out, so they are not split again.</summary>
+        private static bool _resending;
+
+        private static bool Prefix(ChatBox __instance, ref string text_to_send)
+        {
+            if (_resending) return true;
+            if (ModEntry.Instance is not { } mod) return true;
+            if (string.IsNullOrEmpty(text_to_send)) return true;
+
+            // A line break in an outgoing message forces the receiver to wrap where we did not
+            // ask it to -- most visibly, it strands the sender's name alone on the first line.
+            // The chat box is a single line, so a break can only have arrived from a paste or
+            // from another mod, and flattening it here costs nothing.
+            text_to_send = NormalizePaste(text_to_send);
+            if (string.IsNullOrEmpty(text_to_send)) return false;
+
+            // Commands are read whole and never reach another client's chat box.
+            if (text_to_send[0] == '/') return true;
+
+            if (!ShouldSplit(mod)) return true;
+
+            SpriteFont? font = ChatBox.messageFont(LocalizedContentManager.CurrentLanguageCode);
+            if (font is null) return true;
+
+            // The colour tag is metadata the receiver consumes, not text. Split without it and
+            // give every piece its own copy, or only the last piece keeps the player's colour.
+            SplitColorTag(text_to_send, out string body, out string colorTag);
+
+            List<string> chunks = TextHelper.SplitForVanillaClients(body,
+                candidate => FitsForVanillaClient(__instance, font, candidate + colorTag));
+            if (chunks.Count <= 1) return true;
+
+            _resending = true;
+            try
+            {
+                foreach (string chunk in chunks)
+                    __instance.textBoxEnter(chunk + colorTag);
+            }
+            finally
+            {
+                _resending = false;
+            }
+
+            return false;
+        }
+
+        private static bool ShouldSplit(ModEntry mod)
+        {
+            return mod.Config.SplitLongMessages switch
+            {
+                VanillaSplitMode.Never => false,
+                VanillaSplitMode.Always => true,
+                _ => mod.AnyConnectedPlayerLacksThisMod()
+            };
+        }
+
+        /// <summary>Whether a vanilla client can draw this message without overlapping its
+        /// neighbours.</summary>
+        /// <remarks>
+        ///     That client reserves height as <c>(int)font.MeasureString(wrappedText).Y + 4</c>,
+        ///     but <see cref="ChatMessage.draw" /> steps down by <c>MeasureString("(").Y</c> per
+        ///     line. Those are not the same number, and the gap compounds: each line drifts a
+        ///     little further past the space reserved for it, until it exceeds the 4px of slack
+        ///     and the message covers the one below. Vanilla-length messages never wrap, so the
+        ///     drift never gets the chance to accumulate.
+        ///
+        ///     Asking parseText for the line count rather than measuring here is what keeps this
+        ///     correct for Japanese, Chinese and Thai, which it wraps per character rather than
+        ///     per word.
+        /// </remarks>
+        private static bool FitsForVanillaClient(ChatBox chatBox, SpriteFont font, string message)
+        {
+            string formatted = chatBox.formatMessage(Game1.player.UniqueMultiplayerID, 0, message);
+            string wrapped = Game1.parseText(formatted, font, chatBox.chatBox.Width - VanillaWrapPadding);
+
+            int lines = 1;
+            int index = 0;
+            while ((index = wrapped.IndexOf(Environment.NewLine, index, StringComparison.Ordinal)) >= 0)
+            {
+                lines++;
+                index += Environment.NewLine.Length;
+            }
+
+            return lines <= MaxVanillaLines;
+        }
+
+        /// <summary>Separates the trailing chat-colour tag, if the message carries one.</summary>
+        private static void SplitColorTag(string text, out string body, out string colorTag)
+        {
+            body = text;
+            colorTag = string.Empty;
+
+            if (text.Length == 0 || text[^1] != ']')
+                return;
+
+            int open = text.LastIndexOf(" [", StringComparison.Ordinal);
+            if (open < 0)
+                return;
+
+            string name = text.Substring(open + 2, text.Length - open - 3);
+            if (ChatMessage.getColorFromName(name).Equals(Color.White))
+                return;
+
+            body = text.Substring(0, open);
+            colorTag = text.Substring(open);
+        }
+    }
+
     [HarmonyPatch(typeof(ChatTextBox), "Draw")]
     public class DrawPatch
     {
@@ -757,14 +1001,13 @@ internal class ChatTextBoxPatches
 
             float visibleWidth = __instance.Width - TextBoxWidthPadding;
 
-            // language must be set BEFORE parsing, so snippet widths are measured with the
-            // same font the text is drawn with. Otherwise the caret drifts in ja/ko/zh/ru.
-            ChatMessage msg = new() { language = lang };
-            msg.parseMessageForEmoji(s.FullText);
+            // The language must be passed in, so snippet widths are measured with the same
+            // font the text is drawn with. Otherwise the caret drifts in ja/ko/zh/ru.
+            List<ChatSnippet> snippets = TextHelper.ParseSnippets(s.FullText, lang);
 
-            float cursorPixel = CalculateCursorPixelPosition(msg.message, s.CursorIndex, font);
+            float cursorPixel = CalculateCursorPixelPosition(snippets, s.CursorIndex, font);
             float totalWidth = 0f;
-            foreach (var sn in msg.message)
+            foreach (ChatSnippet sn in snippets)
                 totalWidth += sn.myLength;
 
             UpdateScrollOffset(s, cursorPixel, visibleWidth, totalWidth);
@@ -775,7 +1018,7 @@ internal class ChatTextBoxPatches
                 if (s.SelectionStart != s.SelectionEnd)
                     DrawSelectionHighlight(spriteBatch, s, font, __instance);
 
-                DrawTextContent(spriteBatch, msg.message, __instance, s, font, textColor);
+                DrawTextContent(spriteBatch, snippets, __instance, s, font, textColor);
 
                 if (showCursor && __instance.Selected)
                     DrawCursor(spriteBatch, __instance, cursorPixel, s.ScrollOffset, cursorColor);

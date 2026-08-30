@@ -15,6 +15,9 @@ public sealed class ModEntry : Mod
 
     private Harmony? _harmony;
 
+    /// <summary>Unique ID of the Item Chat Link mod, which also draws chat messages itself.</summary>
+    private const string ItemChatLinkId = "juhyu.ItemChatLink";
+
     #endregion
 
     #region Properties
@@ -28,6 +31,16 @@ public sealed class ModEntry : Mod
     /// Current mod configuration loaded from config.json.
     /// </summary>
     public ModConfig Config { get; private set; } = new();
+
+    /// <summary>
+    /// Whether Item Chat Link is installed.
+    /// </summary>
+    /// <remarks>
+    ///     It draws messages containing an item link itself, from its own prefix on
+    ///     <c>ChatMessage.draw</c>. Two prefixes cannot both take over one method, so this mod
+    ///     steps aside for those messages rather than silencing the other mod's whole feature.
+    /// </remarks>
+    public static bool ItemChatLinkLoaded { get; private set; }
 
     #endregion
 
@@ -80,6 +93,14 @@ public sealed class ModEntry : Mod
     /// </summary>
     private void OnGameLaunched(object? sender, GameLaunchedEventArgs e)
     {
+        // Checked here rather than in Entry: SMAPI loads mods in order, and this one sorts
+        // ahead of Item Chat Link, so during Entry the registry does not know about it yet.
+        // Getting this wrong made every compatibility path below silently dead code.
+        ItemChatLinkLoaded = Helper.ModRegistry.IsLoaded(ItemChatLinkId);
+        if (ItemChatLinkLoaded)
+            Monitor.Log($"Detected {ItemChatLinkId}; item-link messages will be left for it to draw.",
+                LogLevel.Trace);
+
         IGenericModConfigMenuApi? configApi =
             Helper.ModRegistry.GetApi<IGenericModConfigMenuApi>("spacechase0.GenericModConfigMenu");
 
@@ -91,6 +112,34 @@ public sealed class ModEntry : Mod
         }
 
         RegisterConfigMenu(configApi);
+    }
+
+    #endregion
+
+    #region Multiplayer
+
+    /// <summary>
+    /// Whether any connected player would render a longer-than-vanilla message incorrectly.
+    /// </summary>
+    /// <remarks>
+    ///     A client without this mod reserves a message's height from one text wrap and then
+    ///     draws it with another, so a message long enough to wrap overlaps its neighbours on
+    ///     their screen. Nothing can be patched there, so the sender has to split the message
+    ///     instead -- but only when someone is actually going to be affected, since splitting
+    ///     costs everyone else the single-message view.
+    /// </remarks>
+    public bool AnyConnectedPlayerLacksThisMod()
+    {
+        foreach (IMultiplayerPeer peer in Helper.Multiplayer.GetConnectedPlayers())
+        {
+            if (!peer.HasSmapi)
+                return true;
+
+            if (peer.GetMod(ModManifest.UniqueID) is null)
+                return true;
+        }
+
+        return false;
     }
 
     #endregion
@@ -144,6 +193,27 @@ public sealed class ModEntry : Mod
             setValue: value => Config.MaxChatHistory = value,
             min: 10,
             max: 500
+        );
+
+        api.AddTextOption(
+            manifest: ModManifest,
+            name: () => t.Get("config.splitLongMessages.name"),
+            tooltip: () => t.Get("config.splitLongMessages.tooltip"),
+            getValue: () => Config.SplitLongMessages.ToString(),
+            setValue: value => Config.SplitLongMessages =
+                Enum.TryParse(value, out VanillaSplitMode parsed) ? parsed : VanillaSplitMode.Auto,
+            allowedValues: new[]
+            {
+                nameof(VanillaSplitMode.Auto),
+                nameof(VanillaSplitMode.Always),
+                nameof(VanillaSplitMode.Never)
+            },
+            formatAllowedValue: value => value switch
+            {
+                nameof(VanillaSplitMode.Always) => t.Get("config.splitLongMessages.always"),
+                nameof(VanillaSplitMode.Never) => t.Get("config.splitLongMessages.never"),
+                _ => t.Get("config.splitLongMessages.auto")
+            }
         );
     }
 

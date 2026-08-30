@@ -223,6 +223,11 @@ internal class ChatBoxScrollPatches
     [HarmonyPatch(typeof(ChatBox), "draw")]
     public sealed class DrawScrollPatch
     {
+        // Runs last. This prefix skips the original, and Harmony stops at the first prefix that
+        // does, so anything sorted behind it never runs at all. Item Chat Link opens its hover
+        // capture in a prefix here and closes it in a postfix; losing only the prefix leaves it
+        // reading stale hover state, and its tooltips stop appearing.
+        [HarmonyPriority(Priority.Low)]
         private static bool Prefix(ChatBox __instance, SpriteBatch b)
         {
             ScrollState state = GetScrollState(__instance);
@@ -610,16 +615,9 @@ internal class ChatBoxScrollPatches
             __instance.maxMessages = state.MaxMessages;
         }
 
-        private static void Postfix(ChatBox __instance)
-        {
-            // Get the messages list
-            if (s_MessagesField.GetValue(__instance) is not List<ChatMessage> messages || messages.Count == 0)
-                return;
-
-            // Fix the height of the most recently added message
-            ChatMessage lastMessage = messages[messages.Count - 1];
-            FixMessageHeight(lastMessage, __instance.chatBox.Width);
-        }
+        // The height is fixed from ChatMessagePatches' postfix instead, because it can only be
+        // worked out once the sender name has been recorded there -- the name changes how the
+        // message is tokenised, and therefore where it wraps.
 
         private static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions)
         {
@@ -656,7 +654,7 @@ internal class ChatBoxScrollPatches
             new[] { typeof(string), typeof(SpriteFont), typeof(int) });
 
         MethodInfo customParseMethod =
-            AccessTools.Method(typeof(TextHelper), nameof(TextHelper.ParseTextWithWrapping));
+            AccessTools.Method(typeof(TextHelper), nameof(TextHelper.PrepareMessageText));
 
         foreach (var instruction in instructions)
         {
@@ -673,19 +671,28 @@ internal class ChatBoxScrollPatches
 
 
 
-    private static void FixMessageHeight(ChatMessage message, int chatBoxWidth)
+    /// <summary>Reserves the right number of lines for a message.</summary>
+    /// <remarks>
+    ///     When this mod draws the message, the count comes from the very layout pass that will
+    ///     draw it, so the two cannot disagree. When another mod draws it -- Item Chat Link takes
+    ///     over any message holding an item link -- fall back to measuring whole snippets, which
+    ///     is what vanilla's own drawing does.
+    /// </remarks>
+    internal static void FixMessageHeight(ChatMessage message, int chatBoxWidth)
     {
-        // Count the actual lines using the same logic as the draw method
-        int lineCount = TextHelper.CountMessageLines(message);
-
-        // Each line needs space based on font measurement
-        // Use the same measurement the game uses
         SpriteFont font = ChatBox.messageFont(message.language);
         if (font == null)
         {
             message.verticalSize = 40; // Fallback
             return;
         }
+
+        // Break the message into lines that fit, now that every snippet exists. Done before
+        // counting, so the reserved height matches the lines that will actually be painted.
+        TextHelper.WrapMessage(message);
+
+        int lineCount = ChatMessagePatches.DrawMessagePatch.TryGetLineCount(message)
+                        ?? TextHelper.CountMessageLines(message);
 
         // The game uses MeasureString("(").Y for line height
         float lineHeight = font.MeasureString("(").Y;
