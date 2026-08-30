@@ -170,7 +170,7 @@ and partial translations are fine because SMAPI falls back to English per key.
 
 This mod has been translated by the following contributors:
 
-- **Chinese (Simplified)** — @BlackRosePetals ([#2](https://github.com/sjohnson1021/StardewChatImprovements/pull/2))
+- **Chinese (Simplified)** — @BlackRosePetals, CNSCZJ on Nexus ([#2](https://github.com/sjohnson1021/StardewChatImprovements/pull/2))
 
 ## Building from source
 

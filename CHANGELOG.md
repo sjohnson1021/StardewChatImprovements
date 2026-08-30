@@ -5,6 +5,8 @@
 Compatibility fixes for Chat Time and Item Chat Link, and a fix for long messages
 overlapping on the screens of players who don't have the mod.
 
+- Added a Simplified Chinese translation, contributed by
+  [@BlackRosePetals](https://github.com/BlackRosePetals) (CNSCZJ on Nexus).
 - Fixed long messages overlapping the messages around them for a player without
   the mod. Such a client reserves a message's height by advancing the font's line
   spacing per line but draws it stepping down by slightly more, so each line

@@ -46,7 +46,7 @@ The cursor moves by character as your language actually defines it, rather than 
 
 Text is also measured with the same font it's drawn with, so the caret stays lined up with your text in Japanese, Korean, Chinese and Russian, where the game uses a different font from English.
 
-Every piece of text the mod shows you is translatable, and [b]translations are very welcome[/b]. Only English ships today. If you'd like to add your language it's a single small file, and partial translations work fine — anything you don't translate falls back to English. Details are in the GitHub repository.
+Every piece of text the mod shows you is translatable, and [b]translations are very welcome[/b]. English and Simplified Chinese ship today — thank you to [b]CNSCZJ[/b] for the Chinese translation. If you'd like to add your language it's a single small file, and partial translations work fine — anything you don't translate falls back to English. Details are in the GitHub repository.
 
 [line]
 
@@ -85,7 +85,7 @@ Two link settings default to the cautious option, because links in chat come fro
 [*]Stardew Valley 1.6+, SMAPI 4.0.0+
 [*]Single player and multiplayer. This is client-side and other players don't need it, though a player without it can't draw a longer-than-vanilla message correctly — see [b]Split long messages[/b] above.
 [*]Windows, macOS and Linux.
-[*][b]Item Chat Link[/b] — supported. Messages carrying an item link are left for it to draw, so its tooltips keep working; those messages don't get this mod's link colouring or bold sender name.
+[*][b]Item Chat Link[/b] — supported. Messages carrying an item link are left for it to draw, so its tooltips keep working; those messages don't get this mod's link colouring or bold sender name. If hovering a link shows no tooltip, set your zoom level and UI scale to 100% — that is a bug in Item Chat Link's hover detection rather than this mod, and it has been reported.
 [*][b]Chat Time[/b] — supported. Its timestamp stays on chat messages instead of leaking into the line you're typing.
 [*]The drawing patches run last, so a mod that only watches the chat being drawn still gets to. A mod that takes drawing over itself [b]will conflict[/b].
 [/list]
